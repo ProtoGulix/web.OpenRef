@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS page (
     type         VARCHAR(50),   -- 'cover' | 'index' | 'schema' | 'parts_list'
     image        VARCHAR(500),
     thumb        VARCHAR(500),
-    status       VARCHAR(20) DEFAULT 'pending'  -- 'pending' | 'ocr_running' | 'done' | 'error'
+    status       VARCHAR(20) DEFAULT 'pending'  -- 'pending' | 'ocr_running' | 'done' | 'parse_running' | 'refs_done' | 'error'
 );
 
 CREATE TABLE IF NOT EXISTS bloc (

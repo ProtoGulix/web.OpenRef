@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import AsyncGenerator
 
 import asyncpg
+import httpx
 import pdfplumber
 import pytesseract
 from fastapi import APIRouter, File, Form, UploadFile
@@ -17,14 +18,21 @@ router = APIRouter()
 
 STORAGE_ROOT = Path(os.environ.get("STORAGE_ROOT", "../storage/pages"))
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/openref")
-WORKERS = 4
+OLLAMA_URL   = os.environ.get("OLLAMA_URL", "http://localhost:11434")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:7b")
+WORKERS      = 4
+PARSE_WORKERS = 2  # threads parse en parallèle de l'OCR
 
-_executor = ThreadPoolExecutor(max_workers=WORKERS)
+_executor = ThreadPoolExecutor(max_workers=WORKERS + PARSE_WORKERS)
 
 
 async def _get_db() -> asyncpg.Connection:
     return await asyncpg.connect(DATABASE_URL, ssl=False)
 
+
+# ---------------------------------------------------------------------------
+# Helpers PDF / image
+# ---------------------------------------------------------------------------
 
 def _is_pdf_native(pdf_bytes: bytes) -> bool:
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
@@ -35,7 +43,6 @@ def _is_pdf_native(pdf_bytes: bytes) -> bool:
 
 
 def _split_one_page(args: tuple) -> dict:
-    """Convertit une page PDF en image JPEG, retourne les métadonnées."""
     from pdf2image import convert_from_bytes
     pdf_bytes, page_num, catalogue_id = args
 
@@ -92,7 +99,6 @@ def _preprocess(pil_img: Image.Image) -> Image.Image:
 
 
 def _ocr_page_file(img_path: str) -> list[dict]:
-    """Tesseract sur un fichier image, retourne les blocs."""
     pil_img = Image.open(img_path)
     tsv = pytesseract.image_to_data(
         _preprocess(pil_img),
@@ -117,11 +123,13 @@ def _ocr_page_file(img_path: str) -> list[dict]:
     return blocs
 
 
+def _img_path_from_url(url: str) -> str:
+    parts = url.lstrip("/").split("/")  # ['storage', 'pages', 'N', 'page_NNN.jpg']
+    return str(STORAGE_ROOT / parts[2] / parts[3])
+
+
 # ---------------------------------------------------------------------------
 # POST /split
-# Découpe le PDF en images, insère les pages en BDD (status=pending).
-# SSE: { type: 'start', total } puis { type: 'page_created', page, image, thumb }
-#      puis { type: 'done', total }
 # ---------------------------------------------------------------------------
 
 async def _stream_split(
@@ -135,7 +143,6 @@ async def _stream_split(
 
     try:
         if native:
-            # PDF natif : pas d'images, on extrait directement le texte
             pages_data = await asyncio.to_thread(_extract_blocs_pdfplumber, pdf_bytes)
             total = len(pages_data)
 
@@ -157,7 +164,6 @@ async def _stream_split(
             yield f"data: {json.dumps({'type': 'done', 'total': total})}\n\n"
             return
 
-        # PDF scanné : conversion en images page par page en parallèle
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as _pdf:
             total = len(_pdf.pages)
 
@@ -168,15 +174,13 @@ async def _stream_split(
 
         yield f"data: {json.dumps({'type': 'start', 'total': total, 'method': 'tesseract'})}\n\n"
 
-        # Pool de conversion : WORKERS pages en parallèle, résultats dès qu'ils arrivent
         sem = asyncio.Semaphore(WORKERS)
 
         async def convert_one(page_num: int):
             async with sem:
-                result = await loop.run_in_executor(
+                return await loop.run_in_executor(
                     _executor, _split_one_page, (pdf_bytes, page_num, catalogue_id)
                 )
-                return result
 
         tasks = {asyncio.ensure_future(convert_one(pn)): pn for pn in range(1, total + 1)}
         pending = set(tasks.keys())
@@ -219,83 +223,60 @@ async def split_pdf(
 
 # ---------------------------------------------------------------------------
 # POST /ocr
-# Pool de WORKERS threads qui consomment les pages 'pending' en BDD.
-# Attend si rattrapé par le splitter (total_pages pas encore connu ou pages manquantes).
-# SSE: { type: 'page_start', page_id, page_num }
-#      { type: 'page_done', page_id, page_num, blocs_count }
-#      { type: 'page_error', page_id, page_num, error }
-#      { type: 'done', total }
+# Pool de WORKERS threads Tesseract sur les pages 'pending'.
 # ---------------------------------------------------------------------------
 
-async def _stream_ocr(catalogue_id: int) -> AsyncGenerator[str, None]:
+async def _run_ocr(catalogue_id: int, queue: asyncio.Queue) -> None:
+    """Consomme les pages pending, écrit les blocs, pousse les events dans queue."""
     db = await _get_db()
     loop = asyncio.get_event_loop()
+    pages_done = 0
+    active: set[asyncio.Future] = set()
+
+    async def take_pending() -> dict | None:
+        row = await db.fetchrow(
+            """UPDATE page SET status='ocr_running'
+               WHERE id = (
+                   SELECT id FROM page
+                   WHERE id_catalogue=$1 AND status='pending'
+                   ORDER BY numero LIMIT 1
+                   FOR UPDATE SKIP LOCKED
+               )
+               RETURNING id, numero, image""",
+            catalogue_id,
+        )
+        return dict(row) if row else None
+
+    async def total_expected() -> int | None:
+        return await db.fetchval(
+            "SELECT total_pages FROM catalogue WHERE id=$1", catalogue_id
+        )
+
+    def _ocr_worker(page_id: int, page_num: int, img_path: str) -> dict:
+        return {"page_id": page_id, "page_num": page_num, "blocs": _ocr_page_file(img_path)}
+
+    def _submit(page: dict) -> asyncio.Future:
+        return loop.run_in_executor(
+            _executor, _ocr_worker, page["id"], page["numero"], _img_path_from_url(page["image"])
+        )
 
     try:
-        yield f"data: {json.dumps({'type': 'ocr_start', 'catalogue_id': catalogue_id})}\n\n"
-
-        pages_done = 0
-        active: set[asyncio.Future] = set()
-
-        async def take_next_page() -> dict | None:
-            """Prend atomiquement la prochaine page pending (SKIP LOCKED)."""
-            row = await db.fetchrow(
-                """UPDATE page SET status='ocr_running'
-                   WHERE id = (
-                       SELECT id FROM page
-                       WHERE id_catalogue=$1 AND status='pending'
-                       ORDER BY numero
-                       LIMIT 1
-                       FOR UPDATE SKIP LOCKED
-                   )
-                   RETURNING id, numero, image""",
-                catalogue_id,
-            )
-            return dict(row) if row else None
-
-        async def total_expected() -> int | None:
-            return await db.fetchval(
-                "SELECT total_pages FROM catalogue WHERE id=$1", catalogue_id
-            )
-
-        def _img_path_from_url(url: str) -> str:
-            # url = /storage/pages/{catalogue_id}/page_NNN.jpg
-            parts = url.lstrip("/").split("/")  # ['storage', 'pages', 'N', 'page_NNN.jpg']
-            return str(STORAGE_ROOT / parts[2] / parts[3])
-
-        def _ocr_worker(page_id: int, page_num: int, img_path: str) -> dict:
-            blocs = _ocr_page_file(img_path)
-            return {"page_id": page_id, "page_num": page_num, "blocs": blocs}
-
-        def _submit_page(page: dict) -> asyncio.Future:
-            img_path = _img_path_from_url(page["image"])
-            return loop.run_in_executor(
-                _executor, _ocr_worker, page["id"], page["numero"], img_path
-            )
-
-        # Remplir le pool initial
         for _ in range(WORKERS):
-            page = await take_next_page()
+            page = await take_pending()
             if page and page["image"]:
-                active.add(_submit_page(page))
-                yield f"data: {json.dumps({'type': 'page_start', 'page_id': page['id'], 'page_num': page['numero']})}\n\n"
+                active.add(_submit(page))
+                await queue.put({"type": "page_start", "page_id": page["id"], "page_num": page["numero"]})
 
-        # Boucle principale : dès qu'un thread finit, on traite le résultat et on prend la suivante
         while True:
-            # Si le pool est vide, vérifier s'il reste des pages à traiter
             if not active:
                 total = await total_expected()
                 if total is not None and pages_done >= total:
-                    # Tout traité
                     break
-
-                # Le splitter n'a pas encore tout créé — attendre
-                page = await take_next_page()
+                page = await take_pending()
                 if page and page["image"]:
-                    active.add(_submit_page(page))
-                    yield f"data: {json.dumps({'type': 'page_start', 'page_id': page['id'], 'page_num': page['numero']})}\n\n"
+                    active.add(_submit(page))
+                    await queue.put({"type": "page_start", "page_id": page["id"], "page_num": page["numero"]})
                 else:
-                    # Pas encore de page dispo, petit sleep puis on recheck
                     await asyncio.sleep(1)
                     continue
 
@@ -304,11 +285,8 @@ async def _stream_ocr(catalogue_id: int) -> AsyncGenerator[str, None]:
             for fut in done_set:
                 try:
                     result = fut.result()
-                    page_id = result["page_id"]
-                    page_num = result["page_num"]
-                    blocs = result["blocs"]
+                    page_id, page_num, blocs = result["page_id"], result["page_num"], result["blocs"]
 
-                    # Écrire les blocs en BDD dans une transaction
                     async with db.transaction():
                         for b in blocs:
                             await db.execute(
@@ -317,37 +295,270 @@ async def _stream_ocr(catalogue_id: int) -> AsyncGenerator[str, None]:
                                 page_id, b["block_num"], b["left"], b["top"],
                                 b["width"], b["height"], b["conf"], b["text"],
                             )
-                        await db.execute(
-                            "UPDATE page SET status='done' WHERE id=$1", page_id
-                        )
+                        await db.execute("UPDATE page SET status='done' WHERE id=$1", page_id)
 
                     pages_done += 1
-                    yield f"data: {json.dumps({'type': 'page_done', 'page_id': page_id, 'page_num': page_num, 'blocs_count': len(blocs)})}\n\n"
+                    await queue.put({"type": "page_done", "page_id": page_id, "page_num": page_num, "blocs_count": len(blocs)})
 
                 except Exception as e:
-                    # Extraire page_id depuis l'exception si possible
-                    yield f"data: {json.dumps({'type': 'page_error', 'error': str(e)})}\n\n"
+                    await queue.put({"type": "page_error", "source": "ocr", "error": str(e)})
 
-                # Prendre la page suivante dès qu'un slot se libère
-                page = await take_next_page()
+                page = await take_pending()
                 if page and page["image"]:
-                    active.add(_submit_page(page))
-                    yield f"data: {json.dumps({'type': 'page_start', 'page_id': page['id'], 'page_num': page['numero']})}\n\n"
+                    active.add(_submit(page))
+                    await queue.put({"type": "page_start", "page_id": page["id"], "page_num": page["numero"]})
 
         total = await total_expected()
-        yield f"data: {json.dumps({'type': 'done', 'total': total, 'pages_done': pages_done})}\n\n"
+        await queue.put({"type": "ocr_done", "total": total, "pages_done": pages_done})
 
     finally:
         await db.close()
 
 
+# ---------------------------------------------------------------------------
+# Parse Ollama
+# Pool de PARSE_WORKERS coroutines sur les pages 'done'.
+# ---------------------------------------------------------------------------
+
+PARSE_PROMPT = """Tu es un extracteur de données de catalogue de pièces détachées.
+On te donne les blocs de texte OCR d'une page, chacun avec sa position (left, top).
+Regroupe-les en lignes (même top ± 10px) et identifie les colonnes du tableau :
+- plate_ref : numéro de repère sur le schéma éclaté (colonne PLATE ou #, souvent 1-2 chiffres)
+- part_number : référence pièce (colonne PART No ou Part Number, souvent 4-6 chiffres)
+- description : désignation de la pièce (colonne DESCRIPTION)
+- qty : quantité (colonne Qty ou Q, nombre entier)
+- remarks : remarques éventuelles (colonne REMARKS)
+
+Réponds UNIQUEMENT avec un tableau JSON valide, sans texte avant ni après.
+Format : [{"plate_ref":"1","part_number":"212382","description":"CRANKSHAFT ASSEMBLY STD","qty":1,"remarks":""},...]
+Si une colonne est absente ou illisible, mets null. Ignore les lignes d'en-tête.
+
+Blocs OCR (left, top, text, conf) :
+"""
+
+
+async def _parse_page_ollama(page_id: int, page_num: int, blocs: list[dict]) -> list[dict]:
+    """Envoie les blocs d'une page à Ollama, retourne les références parsées."""
+    blocs_text = "\n".join(
+        f"  ({b['left']:4d},{b['top']:4d}) [{b['conf']:3d}] {b['text']}"
+        for b in sorted(blocs, key=lambda b: (b["pos_top"], b["pos_left"]))
+    )
+
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        resp = await client.post(
+            f"{OLLAMA_URL}/api/generate",
+            json={
+                "model": OLLAMA_MODEL,
+                "prompt": PARSE_PROMPT + blocs_text,
+                "stream": False,
+                "format": "json",
+            },
+        )
+        resp.raise_for_status()
+        raw = resp.json()["response"]
+
+    try:
+        refs = json.loads(raw)
+        if not isinstance(refs, list):
+            return []
+        return refs
+    except json.JSONDecodeError:
+        # Tentative de récupération si le LLM a ajouté du texte autour
+        import re
+        m = re.search(r"\[.*\]", raw, re.DOTALL)
+        if m:
+            return json.loads(m.group())
+        return []
+
+
+async def _run_parse(catalogue_id: int, queue: asyncio.Queue) -> None:
+    """Consomme les pages 'done', les envoie à Ollama, insère les références."""
+    db = await _get_db()
+    pages_done = 0
+    active: set[asyncio.Task] = set()
+
+    async def take_done() -> dict | None:
+        row = await db.fetchrow(
+            """UPDATE page SET status='parse_running'
+               WHERE id = (
+                   SELECT id FROM page
+                   WHERE id_catalogue=$1 AND status='done'
+                   ORDER BY numero LIMIT 1
+                   FOR UPDATE SKIP LOCKED
+               )
+               RETURNING id, numero""",
+            catalogue_id,
+        )
+        return dict(row) if row else None
+
+    async def total_expected() -> int | None:
+        return await db.fetchval(
+            "SELECT total_pages FROM catalogue WHERE id=$1", catalogue_id
+        )
+
+    async def parse_one(page_id: int, page_num: int) -> dict:
+        blocs = await db.fetch(
+            "SELECT pos_left, pos_top, text, conf FROM bloc WHERE id_page=$1", page_id
+        )
+        blocs_list = [dict(b) for b in blocs]
+        refs = await _parse_page_ollama(page_id, page_num, blocs_list)
+        return {"page_id": page_id, "page_num": page_num, "refs": refs}
+
+    try:
+        # Remplir le pool parse initial
+        for _ in range(PARSE_WORKERS):
+            page = await take_done()
+            if page:
+                t = asyncio.ensure_future(parse_one(page["id"], page["numero"]))
+                active.add(t)
+                await queue.put({"type": "parse_start", "page_id": page["id"], "page_num": page["numero"]})
+
+        while True:
+            if not active:
+                total = await total_expected()
+                # Attendre si l'OCR n'a pas encore tout terminé
+                ocr_remaining = await db.fetchval(
+                    """SELECT COUNT(*) FROM page
+                       WHERE id_catalogue=$1 AND status IN ('pending','ocr_running','done')""",
+                    catalogue_id,
+                )
+                if total is not None and pages_done >= total and ocr_remaining == 0:
+                    break
+                page = await take_done()
+                if page:
+                    t = asyncio.ensure_future(parse_one(page["id"], page["numero"]))
+                    active.add(t)
+                    await queue.put({"type": "parse_start", "page_id": page["id"], "page_num": page["numero"]})
+                else:
+                    await asyncio.sleep(2)
+                    continue
+
+            done_set, active = await asyncio.wait(active, return_when=asyncio.FIRST_COMPLETED)
+
+            for fut in done_set:
+                try:
+                    result = fut.result()
+                    page_id, page_num, refs = result["page_id"], result["page_num"], result["refs"]
+
+                    async with db.transaction():
+                        for ref in refs:
+                            if not ref.get("part_number") and not ref.get("description"):
+                                continue
+                            await db.execute(
+                                """INSERT INTO reference
+                                   (id_page, plate_ref, part_number, description, qty, remarks)
+                                   VALUES ($1,$2,$3,$4,$5,$6)""",
+                                page_id,
+                                str(ref.get("plate_ref") or "")[:20] or None,
+                                str(ref.get("part_number") or "")[:100] or None,
+                                ref.get("description"),
+                                int(ref["qty"]) if str(ref.get("qty") or "").isdigit() else None,
+                                ref.get("remarks"),
+                            )
+                        await db.execute("UPDATE page SET status='refs_done' WHERE id=$1", page_id)
+
+                    pages_done += 1
+                    await queue.put({"type": "parse_done", "page_id": page_id, "page_num": page_num, "refs_count": len(refs)})
+
+                except Exception as e:
+                    await queue.put({"type": "page_error", "source": "parse", "error": str(e)})
+
+                page = await take_done()
+                if page:
+                    t = asyncio.ensure_future(parse_one(page["id"], page["numero"]))
+                    active.add(t)
+                    await queue.put({"type": "parse_start", "page_id": page["id"], "page_num": page["numero"]})
+
+        total = await total_expected()
+        await queue.put({"type": "parse_done_all", "total": total, "pages_done": pages_done})
+
+    finally:
+        await db.close()
+
+
+# ---------------------------------------------------------------------------
+# POST /ocr  — lance OCR + Parse en parallèle, stream SSE unifié
+# SSE events: page_start, page_done, parse_start, parse_done, page_error,
+#             ocr_done, parse_done_all, done
+# ---------------------------------------------------------------------------
+
+async def _stream_ocr_and_parse(catalogue_id: int) -> AsyncGenerator[str, None]:
+    queue: asyncio.Queue = asyncio.Queue()
+
+    yield f"data: {json.dumps({'type': 'ocr_start', 'catalogue_id': catalogue_id})}\n\n"
+
+    ocr_task   = asyncio.ensure_future(_run_ocr(catalogue_id, queue))
+    parse_task = asyncio.ensure_future(_run_parse(catalogue_id, queue))
+
+    ocr_finished   = False
+    parse_finished = False
+
+    while not (ocr_finished and parse_finished):
+        try:
+            event = await asyncio.wait_for(queue.get(), timeout=2.0)
+        except asyncio.TimeoutError:
+            # Vérifier si les tâches se sont terminées avec une exception
+            if ocr_task.done() and not ocr_finished:
+                if ocr_task.exception():
+                    yield f"data: {json.dumps({'type': 'page_error', 'source': 'ocr', 'error': str(ocr_task.exception())})}\n\n"
+                ocr_finished = True
+            if parse_task.done() and not parse_finished:
+                if parse_task.exception():
+                    yield f"data: {json.dumps({'type': 'page_error', 'source': 'parse', 'error': str(parse_task.exception())})}\n\n"
+                parse_finished = True
+            continue
+
+        if event["type"] == "ocr_done":
+            ocr_finished = True
+        elif event["type"] == "parse_done_all":
+            parse_finished = True
+
+        yield f"data: {json.dumps(event)}\n\n"
+
+    yield f"data: {json.dumps({'type': 'done', 'catalogue_id': catalogue_id})}\n\n"
+
+
 @router.post("/ocr")
 async def ocr_catalogue(catalogue_id: int = Form(...)):
     return StreamingResponse(
-        _stream_ocr(catalogue_id),
+        _stream_ocr_and_parse(catalogue_id),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# ---------------------------------------------------------------------------
+# POST /parse  — relancer uniquement le parse sur un catalogue déjà OCRisé
+# ---------------------------------------------------------------------------
+
+@router.post("/parse")
+async def parse_catalogue(catalogue_id: int = Form(...)):
+    return StreamingResponse(
+        _stream_parse_only(catalogue_id),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+async def _stream_parse_only(catalogue_id: int) -> AsyncGenerator[str, None]:
+    queue: asyncio.Queue = asyncio.Queue()
+    yield f"data: {json.dumps({'type': 'parse_start_all', 'catalogue_id': catalogue_id})}\n\n"
+
+    parse_task = asyncio.ensure_future(_run_parse(catalogue_id, queue))
+
+    while not parse_task.done():
+        try:
+            event = await asyncio.wait_for(queue.get(), timeout=2.0)
+        except asyncio.TimeoutError:
+            continue
+        yield f"data: {json.dumps(event)}\n\n"
+        if event["type"] == "parse_done_all":
+            break
+
+    if parse_task.exception():
+        yield f"data: {json.dumps({'type': 'page_error', 'source': 'parse', 'error': str(parse_task.exception())})}\n\n"
+
+    yield f"data: {json.dumps({'type': 'done', 'catalogue_id': catalogue_id})}\n\n"
 
 
 # ---------------------------------------------------------------------------

@@ -162,20 +162,23 @@ async function runOcr(jobId, catalogueId) {
         try { event = JSON.parse(part.slice(6)) } catch { continue }
 
         if (event.type === 'ocr_start') {
-          await pool.query(
-            `UPDATE job SET phase='ocr' WHERE id=$1`,
-            [jobId]
-          )
+          await pool.query(`UPDATE job SET phase='ocr' WHERE id=$1`, [jobId])
           jobBus.emit(`job:${jobId}`, event)
 
         } else if (event.type === 'page_start') {
           jobBus.emit(`job:${jobId}`, event)
 
         } else if (event.type === 'page_done') {
-          await pool.query(
-            `UPDATE job SET pages_done=pages_done+1 WHERE id=$1`,
-            [jobId]
-          )
+          await pool.query(`UPDATE job SET pages_done=pages_done+1 WHERE id=$1`, [jobId])
+          jobBus.emit(`job:${jobId}`, event)
+
+        } else if (event.type === 'parse_start') {
+          jobBus.emit(`job:${jobId}`, event)
+
+        } else if (event.type === 'parse_done') {
+          jobBus.emit(`job:${jobId}`, event)
+
+        } else if (event.type === 'ocr_done') {
           jobBus.emit(`job:${jobId}`, event)
 
         } else if (event.type === 'page_error') {
@@ -183,8 +186,8 @@ async function runOcr(jobId, catalogueId) {
 
         } else if (event.type === 'done') {
           await pool.query(
-            `UPDATE job SET status='done', pages_done=$1, pages_total=$2, finished_at=NOW() WHERE id=$3`,
-            [event.pages_done ?? null, event.total ?? null, jobId]
+            `UPDATE job SET status='done', pages_total=$1, finished_at=NOW() WHERE id=$2`,
+            [event.total ?? null, jobId]
           )
           jobBus.emit(`job:${jobId}`, event)
         }

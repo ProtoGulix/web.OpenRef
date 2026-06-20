@@ -24,7 +24,9 @@ function PageGrid({ pages, total }) {
         const pn = i + 1
         const { status, thumb } = cell
 
-        const borderColor = status === 'done' ? '#48c78e'
+        const borderColor = status === 'refs_done' ? '#b86bff'
+          : status === 'parse_running' ? '#ff9f43'
+          : status === 'done' ? '#48c78e'
           : status === 'ocr_running' ? '#3e8ed0'
           : status === 'pending' ? '#ffe08a'
           : '#dbdbdb'
@@ -62,7 +64,7 @@ function PageGrid({ pages, total }) {
               fontSize: '10px', lineHeight: 1,
               opacity: status === 'pending' ? 0.4 : 1,
             }}>
-              {status === 'done' ? '✅' : status === 'ocr_running' ? '🔄' : '⏳'}
+              {status === 'refs_done' ? '✨' : status === 'parse_running' ? '🤖' : status === 'done' ? '✅' : status === 'ocr_running' ? '🔄' : '⏳'}
             </div>
           </div>
         )
@@ -139,6 +141,10 @@ function JobCard({ jobId }) {
           setPages(prev => ({ ...prev, [event.page_num]: { ...prev[event.page_num], status: 'ocr_running' } }))
         } else if (event.type === 'page_done') {
           setPages(prev => ({ ...prev, [event.page_num]: { ...prev[event.page_num], status: 'done' } }))
+        } else if (event.type === 'parse_start') {
+          setPages(prev => ({ ...prev, [event.page_num]: { ...prev[event.page_num], status: 'parse_running' } }))
+        } else if (event.type === 'parse_done') {
+          setPages(prev => ({ ...prev, [event.page_num]: { ...prev[event.page_num], status: 'refs_done' } }))
         } else if (event.type === 'page_created') {
           setPages(prev => ({ ...prev, [event.page]: { status: event.thumb ? 'pending' : 'pending', thumb: event.thumb ?? null } }))
           setJob(j => j ? { ...j, converted: (j.converted ?? 0) + 1 } : j)

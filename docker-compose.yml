@@ -20,6 +20,15 @@ services:
       timeout: 5s
       retries: 10
 
+  # ── Ollama LLM ──────────────────────────────────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - ollama_models:/root/.ollama
+    ports:
+      - "11434:11434"
+
   # ── OCR Service ─────────────────────────────────────────────────────────────
   ocr-service:
     build: ./ocr-service
@@ -27,15 +36,18 @@ services:
     volumes:
       - ./ocr-service:/app          # hot-reload --reload
       - ./storage:/storage
-      - easyocr_models:/root/.EasyOCR
     environment:
       STORAGE_ROOT: /storage/pages
       DATABASE_URL: postgresql://postgres:postgres@db:5432/openref
+      OLLAMA_URL: http://ollama:11434
+      OLLAMA_MODEL: qwen2.5:7b
     ports:
       - "8001:8001"
     depends_on:
       db:
         condition: service_healthy
+      ollama:
+        condition: service_started
 
   # ── Scraper Service ─────────────────────────────────────────────────────────
   scraper-service:
@@ -87,4 +99,4 @@ services:
 
 volumes:
   pgdata:
-  easyocr_models:
+  ollama_models:
