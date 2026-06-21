@@ -2,7 +2,7 @@ import { useState } from 'react'
 import OcrConfBadge from './OcrConfBadge'
 import { api } from '../api/client'
 
-export default function ReferenceRow({ ref: refData, onUpdated }) {
+export default function ReferenceRow({ data: refData, onUpdated }) {
   const [editing, setEditing] = useState(false)
   const [form, setForm] = useState({ ...refData })
   const [saving, setSaving] = useState(false)

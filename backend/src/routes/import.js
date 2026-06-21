@@ -116,16 +116,18 @@ async function runSplit(jobId, catalogueId, fileBuffer, filename, mimetype) {
 
 
 // ---------------------------------------------------------------------------
-// Phase 2 : OCR en pool de threads sur les pages pending en BDD
+// Helper : appel SSE générique vers l'OCR service
 // ---------------------------------------------------------------------------
 
-async function runOcr(jobId, catalogueId) {
+async function runOcrPhase(jobId, endpoint, catalogueId, phase, onEvent) {
   const form = new FormData()
   form.append('catalogue_id', String(catalogueId))
 
+  await pool.query(`UPDATE job SET phase=$1 WHERE id=$2`, [phase, jobId])
+
   let res
   try {
-    res = await fetch(`${OCR_URL}/ocr/ocr`, { method: 'POST', body: form })
+    res = await fetch(`${OCR_URL}${endpoint}`, { method: 'POST', body: form })
   } catch (e) {
     await pool.query(
       `UPDATE job SET status='error', error=$1, finished_at=NOW() WHERE id=$2`,
@@ -135,7 +137,7 @@ async function runOcr(jobId, catalogueId) {
   }
 
   if (!res.ok) {
-    const msg = `OCR service error: ${res.status}`
+    const msg = `${endpoint} error: ${res.status}`
     await pool.query(
       `UPDATE job SET status='error', error=$1, finished_at=NOW() WHERE id=$2`,
       [msg, jobId]
@@ -160,41 +162,12 @@ async function runOcr(jobId, catalogueId) {
         if (!part.startsWith('data: ')) continue
         let event
         try { event = JSON.parse(part.slice(6)) } catch { continue }
-
-        if (event.type === 'ocr_start') {
-          await pool.query(`UPDATE job SET phase='ocr' WHERE id=$1`, [jobId])
-          jobBus.emit(`job:${jobId}`, event)
-
-        } else if (event.type === 'page_start') {
-          jobBus.emit(`job:${jobId}`, event)
-
-        } else if (event.type === 'page_done') {
-          await pool.query(`UPDATE job SET pages_done=pages_done+1 WHERE id=$1`, [jobId])
-          jobBus.emit(`job:${jobId}`, event)
-
-        } else if (event.type === 'parse_start') {
-          jobBus.emit(`job:${jobId}`, event)
-
-        } else if (event.type === 'parse_done') {
-          jobBus.emit(`job:${jobId}`, event)
-
-        } else if (event.type === 'ocr_done') {
-          jobBus.emit(`job:${jobId}`, event)
-
-        } else if (event.type === 'page_error') {
-          jobBus.emit(`job:${jobId}`, event)
-
-        } else if (event.type === 'done') {
-          await pool.query(
-            `UPDATE job SET status='done', pages_total=$1, finished_at=NOW() WHERE id=$2`,
-            [event.total ?? null, jobId]
-          )
-          jobBus.emit(`job:${jobId}`, event)
-        }
+        await onEvent(event)
+        jobBus.emit(`job:${jobId}`, event)
       }
     }
   } catch (e) {
-    console.error(`Job ${jobId} OCR stream error:`, e.message)
+    console.error(`Job ${jobId} ${endpoint} stream error:`, e.message)
     await pool.query(
       `UPDATE job SET status='error', error=$1, finished_at=NOW() WHERE id=$2`,
       [e.message, jobId]
@@ -207,28 +180,59 @@ async function runOcr(jobId, catalogueId) {
 
 
 // ---------------------------------------------------------------------------
-// Orchestrateur : split puis ocr
+// Orchestrateur : split → detect → nomenclature → vues → jointure
 // ---------------------------------------------------------------------------
 
 async function runImport(jobId, catalogueId, fileBuffer, filename, mimetype) {
+  // [1+2] Split + deskew
   const splitOk = await runSplit(jobId, catalogueId, fileBuffer, filename, mimetype)
   if (!splitOk) return
 
-  // Vérifier si les pages ont déjà leurs blocs (PDF natif traité dans le split)
-  const { rows } = await pool.query(
-    `SELECT COUNT(*) AS pending FROM page WHERE id_catalogue=$1 AND status='pending'`,
-    [catalogueId]
-  )
-  if (parseInt(rows[0].pending) === 0) {
-    // PDF natif : tout fait dans le split, marquer done directement
-    await pool.query(
-      `UPDATE job SET status='done', phase='ocr', finished_at=NOW() WHERE id=$1`,
-      [jobId]
-    )
-    return
+  // [3] Détection nomenclature
+  const detectOk = await runOcrPhase(jobId, '/ocr/detect', catalogueId, 'detecting', async (event) => {
+    if (event.type === 'page_detected') {
+      await pool.query(`UPDATE job SET pages_done=pages_done+1 WHERE id=$1`, [jobId])
+    }
+  })
+  if (!detectOk) return
+
+  await pool.query(`UPDATE job SET pages_done=0 WHERE id=$1`, [jobId])
+
+  // [4+5] OCR nomenclature
+  const nomenclatureOk = await runOcrPhase(jobId, '/ocr/nomenclature', catalogueId, 'ocr_nomenclature', async (event) => {
+    if (event.type === 'page_done') {
+      await pool.query(`UPDATE job SET pages_done=pages_done+1 WHERE id=$1`, [jobId])
+    }
+  })
+  if (!nomenclatureOk) return
+
+  await pool.query(`UPDATE job SET pages_done=0 WHERE id=$1`, [jobId])
+
+  // [6] OCR vues
+  const vuesOk = await runOcrPhase(jobId, '/ocr/vues', catalogueId, 'ocr_vues', async (event) => {
+    if (event.type === 'page_done') {
+      await pool.query(`UPDATE job SET pages_done=pages_done+1 WHERE id=$1`, [jobId])
+    }
+  })
+  if (!vuesOk) return
+
+  // [7] Jointure nomenclature ↔ vues
+  try {
+    await pool.query(`UPDATE job SET phase='jointure' WHERE id=$1`, [jobId])
+    const form = new FormData()
+    form.append('catalogue_id', String(catalogueId))
+    const res = await fetch(`${OCR_URL}/ocr/jointure`, { method: 'POST', body: form })
+    const result = await res.json()
+    jobBus.emit(`job:${jobId}`, { type: 'jointure_done', ...result })
+  } catch (e) {
+    console.error(`Job ${jobId} jointure error:`, e.message)
   }
 
-  await runOcr(jobId, catalogueId)
+  await pool.query(
+    `UPDATE job SET status='done', phase='done', finished_at=NOW() WHERE id=$1`,
+    [jobId]
+  )
+  jobBus.emit(`job:${jobId}`, { type: 'done', catalogue_id: catalogueId })
 }
 
 
@@ -260,6 +264,29 @@ router.post('/', upload.single('file'), async (req, res) => {
 })
 
 
+// POST /api/import/pages — ajoute des pages à un catalogue existant
+router.post('/pages', upload.single('file'), async (req, res) => {
+  const { catalogue_id } = req.body
+  if (!req.file) return res.status(400).json({ error: 'No file' })
+  if (!catalogue_id) return res.status(400).json({ error: 'catalogue_id requis' })
+
+  const { rows: catRows } = await pool.query('SELECT id FROM catalogue WHERE id=$1', [catalogue_id])
+  if (!catRows[0]) return res.status(404).json({ error: 'Catalogue introuvable' })
+
+  const catalogueId = parseInt(catalogue_id)
+
+  const { rows: jobRows } = await pool.query(
+    `INSERT INTO job (catalogue_id) VALUES ($1) RETURNING id`,
+    [catalogueId]
+  )
+  const jobId = jobRows[0].id
+
+  runImport(jobId, catalogueId, req.file.buffer, req.file.originalname, req.file.mimetype)
+
+  res.status(202).json({ jobId, catalogueId })
+})
+
+
 // GET /api/import/:jobId/stream — SSE temps réel
 router.get('/:jobId/stream', (req, res) => {
   const jobId = parseInt(req.params.jobId)
@@ -278,6 +305,7 @@ router.get('/:jobId/stream', (req, res) => {
   jobBus.on(`job:${jobId}`, onEvent)
   req.on('close', () => jobBus.off(`job:${jobId}`, onEvent))
 })
+
 
 
 // GET /api/import/all — liste tous les jobs (doit être avant /:jobId)

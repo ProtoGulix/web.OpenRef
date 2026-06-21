@@ -12,6 +12,7 @@ export const api = {
   createCatalogue: body => req('/catalogues', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
   patchCatalogue: (id, body) => req(`/catalogues/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
   deleteCatalogue: id => fetch(`${BASE}/catalogues/${id}`, { method: 'DELETE' }),
+  rerunCatalogueNomenclature: (id) => `${BASE}/catalogues/${id}/rerun-nomenclature`,
 
   getCataloguePages: id => req(`/catalogues/${id}/pages`),
   getPage: id => req(`/pages/${id}`),
@@ -19,6 +20,8 @@ export const api = {
   getPageBlocs: id => req(`/pages/${id}/blocs`),
 
   getPageRefs: id => req(`/pages/${id}/references`),
+  getPageNomenclature: id => req(`/pages/${id}/nomenclature`),
+  rerunNomenclature: id => req(`/pages/${id}/rerun-nomenclature`, { method: 'POST' }),
   createRef: (pageId, body) => req(`/pages/${pageId}/references`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
   patchRef: (id, body) => req(`/references/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
   deleteRef: id => fetch(`${BASE}/references/${id}`, { method: 'DELETE' }),

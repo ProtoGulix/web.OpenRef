@@ -64,7 +64,7 @@ function PageGrid({ pages, total }) {
               fontSize: '10px', lineHeight: 1,
               opacity: status === 'pending' ? 0.4 : 1,
             }}>
-              {status === 'refs_done' ? '✨' : status === 'parse_running' ? '🤖' : status === 'done' ? '✅' : status === 'ocr_running' ? '🔄' : '⏳'}
+              {status === 'refs_done' ? '✅' : status === 'parse_running' ? '🤖' : status === 'done' ? '🔍' : status === 'ocr_running' ? '🖼' : '⏳'}
             </div>
           </div>
         )
@@ -76,13 +76,35 @@ function PageGrid({ pages, total }) {
 function JobCard({ jobId }) {
   const [job, setJob] = useState(null)
   const [pages, setPages] = useState({})  // pageNum → { status, thumb }
+  const [parseLaunching, setParseLaunching] = useState(false)
+  const [parseProgress, setParseProgress] = useState({ done: 0, total: 0 })
+
+  const launchParse = () => {
+    setParseLaunching(true)
+    fetch(`/api/import/${jobId}/parse`, { method: 'POST' })
+      .then(r => r.json())
+      .then(() => {
+        setJob(j => j ? { ...j, status: 'running', phase: 'parse', pages_done: 0 } : j)
+        setParseProgress({ done: 0, total: job?.pages_total ?? 0 })
+      })
+      .catch(() => {})
+      .finally(() => setParseLaunching(false))
+  }
 
   const loadPages = (catalogueId) => {
     fetch(`/api/catalogues/${catalogueId}/pages`)
       .then(r => r.json())
       .then(ps => {
         const map = {}
-        ps.forEach(p => { map[p.numero] = { status: p.status ?? 'done', thumb: p.thumb } })
+        ps.forEach(p => {
+          const ps = p.process_status
+          // Traduire process_status → status UI
+          const status = ps === 'ocr_done' ? 'refs_done'
+            : ps === 'detected' ? 'done'
+            : ps === 'deskewed' ? 'ocr_running'
+            : p.status ?? 'pending'
+          map[p.numero] = { status, thumb: p.thumb }
+        })
         setPages(map)
       })
       .catch(() => {})
@@ -145,8 +167,12 @@ function JobCard({ jobId }) {
           setPages(prev => ({ ...prev, [event.page_num]: { ...prev[event.page_num], status: 'parse_running' } }))
         } else if (event.type === 'parse_done') {
           setPages(prev => ({ ...prev, [event.page_num]: { ...prev[event.page_num], status: 'refs_done' } }))
+          setParseProgress(p => ({ ...p, done: p.done + 1 }))
+        } else if (event.type === 'parse_start_all') {
+          setJob(j => j ? { ...j, status: 'running', phase: 'parse' } : j)
+          setParseProgress({ done: 0, total: job?.pages_total ?? 0 })
         } else if (event.type === 'page_created') {
-          setPages(prev => ({ ...prev, [event.page]: { status: event.thumb ? 'pending' : 'pending', thumb: event.thumb ?? null } }))
+          setPages(prev => ({ ...prev, [event.page]: { status: 'pending', thumb: event.thumb ?? null } }))
           setJob(j => j ? { ...j, converted: (j.converted ?? 0) + 1 } : j)
         }
       } catch (_) {}
@@ -168,6 +194,12 @@ function JobCard({ jobId }) {
   const isRunning = job.status === 'running'
   const isConverting = isRunning && (job.phase === 'splitting' || job.phase === 'splitting_done')
   const isOcr = isRunning && job.phase === 'ocr'
+  const isParse = isRunning && job.phase === 'parse'
+  const isParseDone = job.status === 'done' && job.phase === 'parse'
+  const ocrDone = job.phase === 'parse' || job.phase === 'ocr' && job.status === 'done' || isParseDone
+  const canLaunchParse = (job.status === 'done' && job.phase !== 'parse') || job.status === 'error'
+  const parseDone = parseProgress.done
+  const parseTotal = parseProgress.total || job.pages_total || 0
 
   return (
     <div className="box">
@@ -184,7 +216,9 @@ function JobCard({ jobId }) {
         <div className="level-right">
           {isConverting && <span className="tag is-warning is-light is-medium">🔄 Conversion PDF</span>}
           {isOcr && <span className="tag is-info is-light is-medium">🔍 OCR {job.pages_done}/{job.pages_total}</span>}
-          {isDone && <span className="tag is-success is-medium">✅ {job.pages_done} pages</span>}
+          {isParse && <span className="tag is-purple is-light is-medium" style={{ background: '#f3e8ff', color: '#7c3aed' }}>🤖 IA {parseDone}/{parseTotal}</span>}
+          {isParseDone && <span className="tag is-success is-medium">✨ IA terminée</span>}
+          {isDone && !isParseDone && <span className="tag is-success is-medium">✅ {job.pages_done} pages</span>}
           {isError && <span className="tag is-danger is-medium">❌ Erreur</span>}
         </div>
       </div>
@@ -229,11 +263,27 @@ function JobCard({ jobId }) {
 
       {isError && <p className="has-text-danger is-size-7 mb-2">{job.error}</p>}
 
+      {/* Barre parse IA */}
+      {(isParse || isParseDone) && parseTotal > 0 && (
+        <div className="mb-2">
+          <div className="is-flex is-justify-content-space-between" style={{ fontSize: '11px', color: '#888' }}>
+            <span>Extraction références — IA (qwen2.5:7b)</span>
+            <span>{parseDone}/{parseTotal} pages</span>
+          </div>
+          <progress
+            className={`progress mb-0 ${isParseDone ? 'is-success' : 'is-warning'}`}
+            style={{ height: '6px', accentColor: '#7c3aed' }}
+            value={parseDone}
+            max={parseTotal}
+          />
+        </div>
+      )}
+
       {/* Grille pages */}
       <PageGrid pages={pages} total={job.pages_total} />
 
       {/* Actions */}
-      {isDone && (
+      {(isDone || isError) && (
         <div className="buttons mt-3">
           <Link to={`/catalogue/${job.catalogue_id}`} className="button is-light is-small">
             Voir le catalogue
@@ -241,6 +291,26 @@ function JobCard({ jobId }) {
           <Link to={`/admin/catalogue/${job.catalogue_id}`} className="button is-success is-small">
             Corriger les données OCR →
           </Link>
+          {canLaunchParse && (
+            <button
+              className={`button is-small ${parseLaunching ? 'is-loading' : ''}`}
+              style={{ background: '#7c3aed', color: '#fff', borderColor: '#7c3aed' }}
+              onClick={launchParse}
+              disabled={parseLaunching}
+            >
+              🤖 Lancer l'extraction IA
+            </button>
+          )}
+          {isParseDone && (
+            <button
+              className="button is-small is-light"
+              style={{ borderColor: '#7c3aed', color: '#7c3aed' }}
+              onClick={launchParse}
+              disabled={parseLaunching}
+            >
+              🔄 Relancer l'extraction IA
+            </button>
+          )}
         </div>
       )}
     </div>

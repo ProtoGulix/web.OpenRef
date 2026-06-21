@@ -320,27 +320,30 @@ async def _run_ocr(catalogue_id: int, queue: asyncio.Queue) -> None:
 # Pool de PARSE_WORKERS coroutines sur les pages 'done'.
 # ---------------------------------------------------------------------------
 
-PARSE_PROMPT = """Tu es un extracteur de données de catalogue de pièces détachées.
-On te donne les blocs de texte OCR d'une page, chacun avec sa position (left, top).
-Regroupe-les en lignes (même top ± 10px) et identifie les colonnes du tableau :
-- plate_ref : numéro de repère sur le schéma éclaté (colonne PLATE ou #, souvent 1-2 chiffres)
-- part_number : référence pièce (colonne PART No ou Part Number, souvent 4-6 chiffres)
-- description : désignation de la pièce (colonne DESCRIPTION)
-- qty : quantité (colonne Qty ou Q, nombre entier)
-- remarks : remarques éventuelles (colonne REMARKS)
+PARSE_PROMPT = """Catalogue de pièces Land Rover Series III (années 70-80), page scannée OCR.
 
-Réponds UNIQUEMENT avec un tableau JSON valide, sans texte avant ni après.
-Format : [{"plate_ref":"1","part_number":"212382","description":"CRANKSHAFT ASSEMBLY STD","qty":1,"remarks":""},...]
-Si une colonne est absente ou illisible, mets null. Ignore les lignes d'en-tête.
+Les références pièces Land Rover sont : des nombres de 6 chiffres (ex: 272539, 239929, 269889, 537229) OU des codes alphanumériques (ex: RTC3184, ETC5276, SH607101L, WL110001L).
 
-Blocs OCR (left, top, text, conf) :
+Sur cette page (schéma éclaté), chaque référence est annotée à côté du composant dessiné. Un encadré en bas de page peut décrire certaines pièces avec leur référence.
+
+Extrais CHAQUE nombre de 6 chiffres ou code alphanumérique qui est une référence pièce.
+Ignore : numéros de page (ex: "12", "1E 12"), mots en anglais, ponctuation isolée.
+
+Retourne {"refs": [...]} où chaque élément a :
+- "part_number": la référence (obligatoire)
+- "plate_ref": numéro de repère si présent juste avant la référence sur le schéma (null sinon)
+- "description": description si trouvée dans un encadré texte en bas de page (null sinon)
+- "qty": quantité si "(2)" ou "Qty X" présent à côté (null sinon)
+- "remarks": note de compatibilité si présente ex: "From engine No. 366194208" (null sinon)
+
+Blocs OCR (left, top, confiance%, texte) :
 """
 
 
 async def _parse_page_ollama(page_id: int, page_num: int, blocs: list[dict]) -> list[dict]:
     """Envoie les blocs d'une page à Ollama, retourne les références parsées."""
     blocs_text = "\n".join(
-        f"  ({b['left']:4d},{b['top']:4d}) [{b['conf']:3d}] {b['text']}"
+        f"  ({b['pos_left']:4d},{b['pos_top']:4d}) [{b['conf']:3d}%] {b['text']}"
         for b in sorted(blocs, key=lambda b: (b["pos_top"], b["pos_left"]))
     )
 
@@ -358,16 +361,25 @@ async def _parse_page_ollama(page_id: int, page_num: int, blocs: list[dict]) -> 
         raw = resp.json()["response"]
 
     try:
-        refs = json.loads(raw)
-        if not isinstance(refs, list):
+        data = json.loads(raw)
+        # Le LLM retourne {"refs": [...]} ou directement [...]
+        if isinstance(data, dict):
+            refs = data.get("refs", [])
+            if not refs and len(data) == 1:
+                refs = list(data.values())[0]
+        elif isinstance(data, list):
+            refs = data
+        else:
             return []
-        return refs
+        return [r for r in refs if isinstance(r, dict) and r.get("part_number")]
     except json.JSONDecodeError:
-        # Tentative de récupération si le LLM a ajouté du texte autour
         import re
         m = re.search(r"\[.*\]", raw, re.DOTALL)
         if m:
-            return json.loads(m.group())
+            try:
+                return json.loads(m.group())
+            except Exception:
+                pass
         return []
 
 

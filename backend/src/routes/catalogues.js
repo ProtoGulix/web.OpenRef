@@ -31,13 +31,20 @@ router.get('/:id', async (req, res) => {
 })
 
 router.patch('/:id', async (req, res) => {
-  const fields = ['name', 'marque', 'modele', 'annee_debut', 'annee_fin', 'langue']
+  const scalarFields = ['name', 'marque', 'modele', 'annee_debut', 'annee_fin', 'langue']
+  const jsonFields = ['column_template']
   const updates = []
   const values = []
-  fields.forEach(f => {
+  scalarFields.forEach(f => {
     if (req.body[f] !== undefined) {
       values.push(req.body[f])
       updates.push(`${f}=$${values.length}`)
+    }
+  })
+  jsonFields.forEach(f => {
+    if (req.body[f] !== undefined) {
+      values.push(JSON.stringify(req.body[f]))
+      updates.push(`${f}=$${values.length}::jsonb`)
     }
   })
   if (!updates.length) return res.status(400).json({ error: 'Nothing to update' })
@@ -47,6 +54,42 @@ router.patch('/:id', async (req, res) => {
     values
   )
   res.json(rows[0])
+})
+
+// Relancer l'OCR nomenclature sur toutes les pages du catalogue avec le column_template courant
+router.get('/:id/rerun-nomenclature', async (req, res) => {
+  const { id } = req.params
+  const { rows: cats } = await pool.query('SELECT column_template FROM catalogue WHERE id=$1', [id])
+  if (!cats[0]) return res.status(404).json({ error: 'Catalogue not found' })
+
+  const OCR_URL = process.env.OCR_SERVICE_URL || 'http://ocr-service:8001'
+  const form = new URLSearchParams({
+    catalogue_id: id,
+    ...(cats[0].column_template ? { column_template: JSON.stringify(cats[0].column_template) } : {}),
+  })
+
+  // Remettre toutes les pages nomenclature à 'detected'
+  await pool.query(
+    `UPDATE page SET process_status='detected' WHERE id_catalogue=$1 AND has_nomenclature=TRUE`,
+    [id]
+  )
+
+  // Stream SSE depuis l'OCR service vers le client
+  res.setHeader('Content-Type', 'text/event-stream')
+  res.setHeader('Cache-Control', 'no-cache')
+  res.setHeader('X-Accel-Buffering', 'no')
+
+  const ocrRes = await fetch(`${OCR_URL}/ocr/nomenclature`, { method: 'POST', body: form })
+  if (!ocrRes.ok) { res.write(`data: {"type":"error","msg":"OCR error"}\n\n`); return res.end() }
+
+  const reader = ocrRes.body.getReader()
+  const decoder = new TextDecoder()
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    res.write(decoder.decode(value))
+  }
+  res.end()
 })
 
 router.delete('/:id', async (req, res) => {

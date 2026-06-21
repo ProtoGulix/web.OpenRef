@@ -73,45 +73,72 @@ Licence : **CC BY-NC 4.0** — libre mais non commercial.
 
 ---
 
-## Pipeline d'import (3 phases)
+## Pipeline d'import — Architecture séquentielle
 
-### Phase 1 — Split (`POST /ocr/split`)
+Chaque phase est un endpoint SSE indépendant. `process_status` dans `page` permet de reprendre sans tout relancer.
+
+```
+PDF → [1] split → [2] deskew (intégré au split) → [3] detect → [4] nomenclature → [6] vues → [7] jointure
+```
+
+### [1+2] Split + Deskew (`POST /ocr/split`)
 - Reçoit le PDF + `catalogue_id`
-- Détecte PDF natif (pdfplumber) ou scanné (pdf2image + Tesseract)
-- Pour PDF scanné : convertit chaque page en JPEG (4 threads parallèles), insère `page` en BDD avec `status='pending'`, stream SSE `page_created`
-- Pour PDF natif : extrait le texte directement, insère blocs + marque `status='done'`
-- Écrit `catalogue.total_pages` dès l'ouverture du PDF
+- Convertit chaque page en JPEG **300 DPI** (4 threads parallèles)
+- Détecte et corrige l'angle de rotation (Hough, seuil ≥ 0.3°) — l'image stockée EST l'image deskewée
+- Insère `page` avec `process_status='deskewed'`, `deskew_angle`, chemin image
+- Stream SSE : `start`, `page_created`, `page_error`, `done`
 
-### Phase 2 — OCR (`POST /ocr/ocr`)
-- Prend `catalogue_id`, pool de 4 threads Tesseract
-- Chaque thread prend une page `pending` via `SELECT ... FOR UPDATE SKIP LOCKED` (atomique)
-- Écrit les `bloc` en BDD, passe la page en `status='done'`
-- Attend si rattrapé par le splitter (compare `pages_done` vs `catalogue.total_pages`)
-- Stream SSE : `page_start`, `page_done`, `page_error`, `done`
+### [3] Détection nomenclature (`POST /ocr/detect`)
+- OCR rapide pleine page (psm 6)
+- Détecte header tableau par mots-clés (PART NUMBER, DESCRIPTION, REF NO, QTY, ILL, REMARKS)
+- Calcule `nomenclature_bbox` via espacement médian inter-lignes (gap > 2.5× = fin de table)
+- Type la page : `view_only` / `nomenclature_only` / `mixed`
+- Initialise `exclusion_zones = [nomenclature_bbox]`
+- `process_status = 'detected'`
+- Stream SSE : `start`, `page_detected`, `page_error`, `done`
 
-### Phase 3 — Parse références (`POST /ocr/parse`) — À IMPLÉMENTER
-- Prend `catalogue_id`, consomme les pages `status='done'`
-- Envoie les blocs positionnés d'une page à **Ollama** (`qwen2.5:7b` sur VM NAS `192.168.1.161:11434`)
-- Le LLM reconstruit les lignes de tableau et identifie `plate_ref`, `part_number`, `description`, `qty`, `remarks`
-- Insère les `reference` en BDD, passe la page en `status='refs_done'`
-- Variable d'env : `OLLAMA_URL=http://192.168.1.161:11434`
+### [4+5] OCR nomenclature (`POST /ocr/nomenclature`)
+- Pages avec `has_nomenclature=TRUE` et `process_status='detected'`
+- OCR psm 6 ciblé sur `nomenclature_bbox` (crop + 5px marge)
+- Regroupement blocs par Y (tolérance ± demi-hauteur médiane) → lignes
+- Split colonnes : `part_number | description | ref_no [| qty | remarks]`
+- Normalisation part_number (espaces parasites : `AAU  1053` → `AAU1053`)
+- Insertion en `nomenclature` (lié à `catalogue_id`)
+- `process_status = 'ocr_done'`
+- Stream SSE : `start`, `page_done`, `page_error`, `done`
+
+### [6] OCR vues éclatées (`POST /ocr/vues`)
+- Toutes les pages `process_status IN ('detected', 'ocr_done')`
+- Masque les `exclusion_zones` (rectangle blanc sur copie — image stockée non modifiée)
+- OCR psm 11 (sparse text) sur image masquée
+- Extraction regex références : `[A-Z]{1,4}\d{4,8}[A-Z]?`, `\d{6,9}`, `[A-Z]{2,4}\s?\d{3,5}`
+- Quantité `\((\d+)\)` dans le bloc ou bloc adjacent (Y ± 15px)
+- Détection `GROUP [A-Z0-9]+` comme `contexte_groupe`
+- Insertion en `references_vues`
+- Stream SSE : `start`, `page_done`, `page_error`, `done`
+
+### [7] Jointure (`POST /ocr/jointure`)
+- UPDATE `references_vues.nomenclature_id` par jointure `part_number` exact sur `nomenclature` du même catalogue
+- Réponse JSON (pas de SSE) : `{matched, total}`
 
 ### Orchestration backend (`POST /api/import`)
 1. Crée le catalogue + job en BDD
-2. Appelle `runSplit()` → stream SSE phase splitting
-3. Si pages `pending` restantes → appelle `runOcr()` → stream SSE phase ocr
-4. PDF natif : blocs déjà écrits dans le split, job marqué done directement
-5. Phase parse : déclenchée séparément (endpoint dédié, pas encore dans l'orchestrateur)
+2. Appelle `POST /ocr/split` → SSE
+3. Appelle `POST /ocr/detect` → SSE
+4. Appelle `POST /ocr/nomenclature` → SSE (pages avec nomenclature)
+5. Appelle `POST /ocr/vues` → SSE (toutes les pages)
+6. Appelle `POST /ocr/jointure` → JSON
+7. Marque job `done`
 
 ---
 
 ## OCR Service (`ocr-service/`)
 
-Endpoints actuels :
-- `POST /ocr/split` — PDF → images + insertion pages BDD (status=pending), SSE
-- `POST /ocr/ocr` — OCR Tesseract pool 4 threads sur pages pending, SSE
-- `POST /ocr/image` — OCR d'une image unique, retourne blocs JSON
-- `POST /ocr/parse` — **À IMPLÉMENTER** — blocs → références via Ollama
+Routers (`ocr-service/routers/`) :
+- `split.py`        → `POST /ocr/split`, `POST /ocr/deskew`
+- `detect.py`       → `POST /ocr/detect`
+- `nomenclature.py` → `POST /ocr/nomenclature`
+- `vues.py`         → `POST /ocr/vues`, `POST /ocr/jointure`
 
 Dépendances Python : `fastapi`, `uvicorn`, `pytesseract`, `pdf2image`, `pdfplumber`, `Pillow`, `numpy`, `opencv-python-headless`, `asyncpg`
 
@@ -233,12 +260,17 @@ Le modèle est persisté dans le volume `ollama_models` — pas besoin de re-té
 ## Ordre de développement
 
 1. ✅ **BDD** — schéma PostgreSQL + données initiales sources LR
-2. ✅ **OCR Service** — pipeline split (phase 1) + OCR Tesseract pool (phase 2)
+2. ✅ **OCR Service** — pipeline complet : split/deskew, détection, OCR nomenclature, OCR vues, jointure
 3. ✅ **Backend** — endpoints import + pages + références
 4. ✅ **Admin import/correction** — upload, visualisation, suivi job temps réel
-5. 🔲 **Parse références (phase 3)** — Ollama sur VM NAS → table `reference`
-6. 🔲 **Scraper Service** — méthodes api/html/browser, SSE, filtre marque
-7. 🔲 **Frontend recherche + prix** — recherche, fiche référence, prix live
+5. 🔲 **Backend orchestration** — câbler les 5 nouvelles phases dans `POST /api/import`
+6. 🔲 **LLM (phase ultérieure)** — Ollama qwen2.5:7b sur `raw_ocr_blocks` pages view_only/mixed
+7. 🔲 **Scraper Service** — méthodes api/html/browser, SSE, filtre marque
+8. 🔲 **Frontend recherche + prix** — recherche, fiche référence, prix live
+
+### Migrations BDD appliquées
+- `migrate_001.sql` — ajout `catalogue.total_pages`, `page.status`, correction `job.phase` default
+- `migrate_002.sql` — nouveau pipeline : `page` enrichi (page_type, has_nomenclature, nomenclature_bbox, exclusion_zones, deskew_angle, raw_ocr_blocks, process_status), tables `nomenclature` et `references_vues`
 
 ---
 

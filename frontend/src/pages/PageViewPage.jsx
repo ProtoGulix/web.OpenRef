@@ -12,8 +12,14 @@ export default function PageViewPage() {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    Promise.all([api.getPage(id), api.getPageRefs(id)])
-      .then(([pg, rs]) => { setPage(pg); setRefs(rs) })
+    api.getPage(id).then(pg => {
+      setPage(pg)
+      const refsPromise = pg.has_nomenclature
+        ? api.getPageNomenclature(id)
+        : api.getPageRefs(id)
+      return refsPromise
+    })
+      .then(rs => setRefs(rs))
       .finally(() => setLoading(false))
   }, [id])
 
@@ -47,7 +53,7 @@ export default function PageViewPage() {
 
           <table className="table is-fullwidth is-size-7 is-hoverable">
             <thead>
-              <tr><th>#</th><th>Référence</th><th>Description</th><th>Qté</th></tr>
+              <tr><th>#</th><th>Référence</th><th>Description</th><th>Qté</th><th>Remarques</th></tr>
             </thead>
             <tbody>
               {refs.map(r => (
@@ -57,10 +63,11 @@ export default function PageViewPage() {
                   onClick={() => setSelected(r)}
                   style={{ cursor: 'pointer' }}
                 >
-                  <td>{r.plate_ref}</td>
+                  <td>{r.ref_no ?? r.plate_ref}</td>
                   <td><code>{r.part_number}</code></td>
                   <td>{r.description}</td>
                   <td>{r.qty}</td>
+                  <td className="has-text-grey">{r.remarks}</td>
                 </tr>
               ))}
             </tbody>
