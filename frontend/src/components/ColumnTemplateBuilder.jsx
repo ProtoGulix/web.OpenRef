@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
+import { X } from 'lucide-react'
 
 const ROLES = [
   { value: 'part_number', label: 'N° Pièce', color: '#3b82f6' },
@@ -280,7 +281,7 @@ export default function ColumnTemplateBuilder({ page, imageW, imageH, onChange }
                       flexShrink: 0,
                     }}
                     title="Supprimer ce trait"
-                  >✕</button>
+                  ><X size={11} /></button>
                 )}
               </div>
             </div>

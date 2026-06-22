@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Search } from 'lucide-react'
 
 export default function SearchBar({ onSearch, loading }) {
   const [q, setQ] = useState('')
@@ -11,30 +12,24 @@ export default function SearchBar({ onSearch, loading }) {
 
   return (
     <form onSubmit={submit}>
-      <div className="field has-addons">
-        <div className="control is-expanded">
-          <input
-            className="input is-medium"
-            type="text"
-            placeholder="Référence ou description (ex: ERR6066, cylinder block...)"
-            value={q}
-            onChange={e => setQ(e.target.value)}
-          />
-        </div>
-        <div className="control">
-          <div className="select is-medium">
-            <select value={marque} onChange={e => setMarque(e.target.value)}>
-              <option value="">Toutes marques</option>
-              <option value="landrover">Land Rover</option>
-              <option value="motobecane">Motobécane</option>
-            </select>
-          </div>
-        </div>
-        <div className="control">
-          <button className={`button is-dark is-medium ${loading ? 'is-loading' : ''}`} type="submit">
-            Rechercher
-          </button>
-        </div>
+      <div className="or-field-addons">
+        <input
+          className="or-input"
+          style={{ fontSize: '1rem' }}
+          type="text"
+          placeholder="Référence ou description (ex: ERR6066, cylinder block…)"
+          value={q}
+          onChange={e => setQ(e.target.value)}
+        />
+        <select className="or-select" style={{ maxWidth: 180, fontSize: '1rem' }} value={marque} onChange={e => setMarque(e.target.value)}>
+          <option value="">Toutes marques</option>
+          <option value="landrover">Land Rover</option>
+          <option value="motobecane">Motobécane</option>
+        </select>
+        <button className={`or-btn or-btn-primary or-btn-lg${loading ? ' is-loading' : ''}`} type="submit" disabled={loading}>
+          <Search size={16} />
+          Rechercher
+        </button>
       </div>
     </form>
   )

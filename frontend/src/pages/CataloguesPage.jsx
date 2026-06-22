@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { Upload } from 'lucide-react'
 import CatalogueCard from '../components/CatalogueCard'
 import { api } from '../api/client'
 
@@ -11,19 +12,26 @@ export default function CataloguesPage() {
     api.getCatalogues().then(setCatalogues).finally(() => setLoading(false))
   }, [])
 
-  if (loading) return <progress className="progress is-info" />
+  if (loading) return <progress className="or-progress or-progress-indeterminate" />
 
   return (
     <div>
-      <div className="level">
-        <div className="level-left"><h1 className="title level-item">Catalogues</h1></div>
-        <div className="level-right">
-          <Link to="/admin/import" className="button is-dark level-item">Importer un catalogue</Link>
+      <div className="or-page-header">
+        <div>
+          <h1 className="or-page-title">Catalogues</h1>
+          <p className="or-page-subtitle">{catalogues.length} catalogue{catalogues.length !== 1 ? 's' : ''} importé{catalogues.length !== 1 ? 's' : ''}</p>
         </div>
+        <Link to="/admin/import" className="or-btn or-btn-primary">
+          <Upload size={15} /> Importer un catalogue
+        </Link>
       </div>
 
       {catalogues.length === 0
-        ? <p className="has-text-grey">Aucun catalogue importé. <Link to="/admin/import">Importer</Link></p>
+        ? (
+          <div className="or-alert or-alert-info">
+            Aucun catalogue. <Link to="/admin/import" style={{ color: 'var(--brand)', fontWeight: 600 }}>Importer maintenant</Link>.
+          </div>
+        )
         : (
           <div className="columns is-multiline">
             {catalogues.map(c => (

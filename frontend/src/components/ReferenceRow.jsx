@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Pencil, Check, X } from 'lucide-react'
 import OcrConfBadge from './OcrConfBadge'
 import { api } from '../api/client'
 
@@ -18,25 +19,30 @@ export default function ReferenceRow({ data: refData, onUpdated }) {
     }
   }
 
+  const cancel = () => { setForm({ ...refData }); setEditing(false) }
+
   if (!editing) {
     return (
-      <tr className={refData.corrige ? '' : 'has-background-warning-light'}>
-        <td>{refData.plate_ref}</td>
-        <td><code>{refData.part_number}</code></td>
+      <tr className={refData.corrige ? '' : 'is-uncorrected'}>
+        <td><span className="or-mono">{refData.plate_ref}</span></td>
+        <td><span className="or-mono">{refData.part_number}</span></td>
         <td>{refData.description}</td>
         <td>{refData.qty}</td>
-        <td>{refData.remarks}</td>
+        <td className="or-muted" style={{ fontSize: '.8rem' }}>{refData.remarks}</td>
         <td><OcrConfBadge conf={refData.conf} /></td>
         <td>
-          <button className="button is-small is-light" onClick={() => setEditing(true)}>Éditer</button>
+          <button className="or-btn or-btn-ghost or-btn-sm or-btn-icon-only" onClick={() => setEditing(true)} title="Éditer">
+            <Pencil size={13} />
+          </button>
         </td>
       </tr>
     )
   }
 
-  const field = (key, placeholder) => (
+  const field = (key, placeholder, style) => (
     <input
-      className="input is-small"
+      className="or-input or-input-sm"
+      style={style}
       value={form[key] ?? ''}
       placeholder={placeholder}
       onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}
@@ -44,16 +50,25 @@ export default function ReferenceRow({ data: refData, onUpdated }) {
   )
 
   return (
-    <tr className="has-background-info-light">
-      <td>{field('plate_ref', '#')}</td>
-      <td>{field('part_number', 'Référence')}</td>
+    <tr className="is-editing">
+      <td>{field('plate_ref', '#', { width: 60 })}</td>
+      <td>{field('part_number', 'Référence', { width: 110 })}</td>
       <td>{field('description', 'Description')}</td>
-      <td><input className="input is-small" type="number" value={form.qty ?? ''} onChange={e => setForm(f => ({ ...f, qty: e.target.value }))} style={{ width: 60 }} /></td>
+      <td>
+        <input className="or-input or-input-sm" type="number" value={form.qty ?? ''} style={{ width: 60 }}
+          onChange={e => setForm(f => ({ ...f, qty: e.target.value }))} />
+      </td>
       <td>{field('remarks', 'Remarques')}</td>
       <td></td>
       <td>
-        <button className={`button is-small is-success mr-1 ${saving ? 'is-loading' : ''}`} onClick={save}>Valider</button>
-        <button className="button is-small is-light" onClick={() => { setForm({ ...refData }); setEditing(false) }}>Annuler</button>
+        <div className="or-flex or-gap-1">
+          <button className={`or-btn or-btn-success or-btn-sm or-btn-icon-only${saving ? ' is-loading' : ''}`} onClick={save} title="Valider">
+            <Check size={13} />
+          </button>
+          <button className="or-btn or-btn-ghost or-btn-sm or-btn-icon-only" onClick={cancel} title="Annuler">
+            <X size={13} />
+          </button>
+        </div>
       </td>
     </tr>
   )

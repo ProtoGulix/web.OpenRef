@@ -1,10 +1,14 @@
 import { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
+import { ChevronRight } from 'lucide-react'
 import PageThumb from '../components/PageThumb'
 import { api } from '../api/client'
 
-const TYPES = ['', 'cover', 'index', 'schema', 'parts_list']
-const TYPE_LABELS = { '': 'Tous', cover: 'Couverture', index: 'Index', schema: 'Schéma', parts_list: 'Liste pièces' }
+const TYPES = ['', 'cover', 'index', 'schema', 'parts_list', 'view_only', 'mixed']
+const TYPE_LABELS = {
+  '': 'Toutes', cover: 'Couverture', index: 'Index',
+  schema: 'Schéma', parts_list: 'Liste pièces', view_only: 'Vue éclatée', mixed: 'Mixte',
+}
 
 export default function CataloguePage() {
   const { id } = useParams()
@@ -19,29 +23,39 @@ export default function CataloguePage() {
       .finally(() => setLoading(false))
   }, [id])
 
-  if (loading) return <progress className="progress is-info" />
-  if (!catalogue) return <p>Catalogue introuvable.</p>
+  if (loading) return <progress className="or-progress" />
+  if (!catalogue) return <p className="or-muted">Catalogue introuvable.</p>
 
   const filtered = filter ? pages.filter(p => p.type === filter) : pages
 
   return (
     <div>
-      <nav className="breadcrumb"><ul>
-        <li><Link to="/catalogues">Catalogues</Link></li>
-        <li className="is-active"><a>{catalogue.name}</a></li>
-      </ul></nav>
+      <div className="or-breadcrumb">
+        <Link to="/catalogues">Catalogues</Link>
+        <ChevronRight size={12} className="or-breadcrumb-sep" />
+        <span>{catalogue.name}</span>
+      </div>
 
-      <h1 className="title">{catalogue.name}</h1>
-      <p className="subtitle">{catalogue.marque} — {catalogue.modele} ({catalogue.annee_debut}–{catalogue.annee_fin})</p>
+      <div className="or-page-header">
+        <div>
+          <h1 className="or-page-title">{catalogue.name}</h1>
+          <p className="or-page-subtitle">
+            {catalogue.marque}{catalogue.modele ? ` — ${catalogue.modele}` : ''}
+            {(catalogue.annee_debut || catalogue.annee_fin) ? ` · ${catalogue.annee_debut}–${catalogue.annee_fin}` : ''}
+            {' · '}{pages.length} pages
+          </p>
+        </div>
+      </div>
 
-      <div className="tabs mb-4">
-        <ul>
-          {TYPES.map(t => (
-            <li key={t} className={filter === t ? 'is-active' : ''}>
-              <a onClick={() => setFilter(t)}>{TYPE_LABELS[t]}</a>
-            </li>
-          ))}
-        </ul>
+      <div className="or-tabs">
+        {TYPES.filter(t => t === '' || pages.some(p => p.type === t)).map(t => (
+          <button key={t} className={`or-tab${filter === t ? ' active' : ''}`} onClick={() => setFilter(t)}>
+            {TYPE_LABELS[t]}
+            {t !== '' && <span className="or-badge or-badge-neutral" style={{ marginLeft: '.35rem' }}>
+              {pages.filter(p => p.type === t).length}
+            </span>}
+          </button>
+        ))}
       </div>
 
       <div className="columns is-multiline">

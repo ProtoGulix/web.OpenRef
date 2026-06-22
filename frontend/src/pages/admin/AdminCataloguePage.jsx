@@ -3,6 +3,10 @@ import { useParams, Link, useNavigate } from 'react-router-dom'
 import { api } from '../../api/client'
 import ColumnTemplateBuilder from '../../components/ColumnTemplateBuilder'
 import BboxEditor from '../../components/BboxEditor'
+import {
+  X, FilePlus, TableProperties, Plus, Save, RotateCcw,
+  CheckCircle, AlertCircle, Pencil, ChevronRight, PenSquare
+} from 'lucide-react'
 
 function FullPageImage({ src, alt, onMeasure }) {
   const imgRef = useRef(null)
@@ -37,6 +41,7 @@ export default function AdminCataloguePage() {
   const [templateDraft, setTemplateDraft] = useState(null)
   const [savingTemplate, setSavingTemplate] = useState(false)
   const [rerunMsg, setRerunMsg] = useState(null)
+  const [rerunStatus, setRerunStatus] = useState(null) // 'success' | 'error'
   const [rerunProgress, setRerunProgress] = useState(null)
   const [selectedPageId, setSelectedPageId] = useState(null)
   const [pendingBboxes, setPendingBboxes] = useState([])   // [{name,x1,y1,x2,y2}, ...]
@@ -92,7 +97,7 @@ export default function AdminCataloguePage() {
     }
   }, [samplePage?.id])
 
-  if (loading) return <progress className="progress is-info" />
+  if (loading) return <progress className="or-progress" />
 
   const filtered = pages.filter(p => {
     if (filter === 'uncorrected') return p.nb_refs > 0 && p.nb_corriges < p.nb_refs
@@ -156,16 +161,14 @@ export default function AdminCataloguePage() {
     if (!templateDraft) return
     setSavingTemplate(true)
     setRerunMsg(null)
+    setRerunStatus(null)
     setRerunProgress(null)
     try {
-      // Convertir dividers en column_template {field: x_abs} utilisable par l'OCR
       const bbox = samplePage?.nomenclature_bbox
-      const bboxW = bbox ? bbox.x2 - bbox.x1 : 1000
       const template = buildTemplate(templateDraft, bbox)
       await api.patchCatalogue(id, { column_template: template })
       setCatalogue(c => ({ ...c, column_template: template }))
 
-      // Relancer l'OCR via SSE
       const url = api.rerunCatalogueNomenclature(id)
       const evs = new EventSource(url)
       let done = 0, total = 0
@@ -175,25 +178,28 @@ export default function AdminCataloguePage() {
         if (data.type === 'page_done') { done++; setRerunProgress({ done, total }) }
         if (data.type === 'done') {
           evs.close()
-          setRerunMsg(`✅ OCR terminé — ${done} pages traitées`)
+          setRerunMsg(`OCR terminé — ${done} pages traitées`)
+          setRerunStatus('success')
           setSavingTemplate(false)
           setShowTemplateBuilder(false)
-          // Recharger les pages
           api.getCataloguePages(id).then(setPages)
         }
         if (data.type === 'error') {
           evs.close()
-          setRerunMsg(`❌ Erreur: ${data.msg}`)
+          setRerunMsg(`Erreur: ${data.msg}`)
+          setRerunStatus('error')
           setSavingTemplate(false)
         }
       }
       evs.onerror = () => {
         evs.close()
-        setRerunMsg('❌ Connexion perdue')
+        setRerunMsg('Connexion perdue')
+        setRerunStatus('error')
         setSavingTemplate(false)
       }
     } catch (e) {
-      setRerunMsg(`❌ ${e.message}`)
+      setRerunMsg(e.message)
+      setRerunStatus('error')
       setSavingTemplate(false)
     }
   }
@@ -221,26 +227,29 @@ export default function AdminCataloguePage() {
 
   return (
     <div>
-      <nav className="breadcrumb"><ul>
-        <li><Link to="/catalogues">Catalogues</Link></li>
-        <li className="is-active"><a>Admin — {catalogue?.name}</a></li>
-      </ul></nav>
+      <div className="or-breadcrumb">
+        <Link to="/catalogues">Catalogues</Link>
+        <ChevronRight size={12} />
+        <span>Admin — {catalogue?.name}</span>
+      </div>
 
-      <div className="is-flex is-align-items-center is-justify-content-space-between mb-3">
-        <h1 className="title mb-0">Correction OCR — {catalogue?.name}</h1>
-        <div className="is-flex" style={{ gap: 8 }}>
+      <div className="or-page-header">
+        <h1 className="or-page-title">Correction OCR — {catalogue?.name}</h1>
+        <div className="or-flex or-gap-2">
           <button
-            className="button is-info is-light is-small"
+            className={`or-btn or-btn-sm ${showAddPages ? 'or-btn-warning' : 'or-btn-secondary'}`}
             onClick={() => { setShowAddPages(s => !s); setAddError(null) }}
           >
-            {showAddPages ? '✕ Annuler' : '+ Ajouter des pages'}
+            {showAddPages ? <X size={14} /> : <FilePlus size={14} />}
+            <span>{showAddPages ? 'Annuler' : 'Ajouter des pages'}</span>
           </button>
           {samplePage && (
             <button
-              className={`button is-warning is-light is-small ${showTemplateBuilder ? 'is-warning' : ''}`}
-              onClick={() => { setShowTemplateBuilder(s => !s); setRerunMsg(null) }}
+              className={`or-btn or-btn-sm ${showTemplateBuilder ? 'or-btn-warning' : 'or-btn-secondary'}`}
+              onClick={() => { setShowTemplateBuilder(s => !s); setRerunMsg(null); setRerunStatus(null) }}
             >
-              {showTemplateBuilder ? '✕ Fermer le gabarit' : '📐 Gabarit colonnes'}
+              {showTemplateBuilder ? <X size={14} /> : <TableProperties size={14} />}
+              <span>{showTemplateBuilder ? 'Fermer le gabarit' : 'Gabarit colonnes'}</span>
             </button>
           )}
         </div>
@@ -248,22 +257,22 @@ export default function AdminCataloguePage() {
 
       {/* Import pages supplémentaires */}
       {showAddPages && (
-        <div className="box mb-4">
-          <h2 className="subtitle is-6 mb-3">Ajouter des pages au catalogue</h2>
+        <div className="or-box" style={{ marginBottom: '1.5rem' }}>
+          <h2 className="or-section-title">Ajouter des pages au catalogue</h2>
           <form onSubmit={startAddPages}>
             <div className="field">
               <label className="label">Fichier PDF ou image</label>
               <input
                 ref={addFileRef}
-                className="input"
+                className="or-input"
                 type="file"
                 accept=".pdf,image/*"
                 onChange={e => setAddFile(e.target.files[0])}
               />
             </div>
-            {addError && <div className="notification is-danger is-light py-2 px-3">{addError}</div>}
+            {addError && <div className="or-alert or-alert-error">{addError}</div>}
             <button
-              className={`button is-info ${addImporting ? 'is-loading' : ''}`}
+              className={`or-btn or-btn-primary ${addImporting ? 'is-loading' : ''}`}
               type="submit"
               disabled={addImporting}
             >
@@ -275,21 +284,21 @@ export default function AdminCataloguePage() {
 
       {/* Gabarit colonnes */}
       {showTemplateBuilder && samplePage && (
-        <div className="box mb-4" style={{ background: '#1a1a2e', border: '1px solid #374151' }}>
-          <h2 className="subtitle is-6 has-text-white mb-3">
+        <div className="or-box" style={{ marginBottom: '1.5rem', background: '#1a1a2e', border: '1px solid #374151' }}>
+          <h2 className="or-section-title" style={{ color: '#94a3b8' }}>
             Définir le gabarit de colonnes
-            <span className="is-size-7 has-text-grey ml-2">— page {samplePage.numero}</span>
+            <span style={{ fontSize: '.8rem', color: '#6b7280', marginLeft: '0.5rem' }}>— page {samplePage.numero}</span>
           </h2>
 
           {catalogue?.column_template && (
-            <p className="is-size-7 has-text-warning mb-2">
+            <p style={{ fontSize: '.8rem', color: '#a16207', marginBottom: '0.5rem' }}>
               Gabarit existant : {Object.entries(catalogue.column_template).map(([k, v]) => `${k}=${v}`).join(', ')}
             </p>
           )}
 
           {/* Sélecteur de page par miniatures */}
           <div className="mb-3">
-            <p className="is-size-7 has-text-grey mb-2">Page de référence ({nomenclaturePages.length} pages avec nomenclature) :</p>
+            <p style={{ fontSize: '.8rem', color: '#6b7280', marginBottom: '0.5rem' }}>Page de référence ({nomenclaturePages.length} pages avec nomenclature) :</p>
             <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 6 }}>
               {nomenclaturePages.map(p => {
                 const isSelected = p.id === samplePage?.id
@@ -330,31 +339,34 @@ export default function AdminCataloguePage() {
 
             {/* Colonne gauche : page entière avec BboxEditors */}
             <div className="column is-half" style={{ position: 'sticky', top: '1rem' }}>
-              <p className="is-size-7 has-text-grey mb-1">
+              <p style={{ fontSize: '.8rem', color: '#6b7280', marginBottom: '0.25rem' }}>
                 Dessinez les zones de nomenclature sur la page, puis définissez les colonnes à droite.
               </p>
 
               {/* Onglets des zones */}
-              <div className="is-flex is-align-items-center mb-2" style={{ gap: 6, flexWrap: 'wrap' }}>
+              <div className="or-flex or-gap-2" style={{ marginBottom: '0.5rem', flexWrap: 'wrap' }}>
                 {pendingBboxes.map((b, i) => (
-                  <div key={i} className="is-flex is-align-items-center" style={{ gap: 2 }}>
+                  <div key={i} className="or-flex or-gap-2">
                     <button
-                      className={`button is-small ${activeBboxIdx === i ? 'is-warning' : 'is-light'}`}
+                      className={`or-btn or-btn-sm ${activeBboxIdx === i ? 'or-btn-warning' : 'or-btn-secondary'}`}
                       onClick={() => setActiveBboxIdx(i)}
                     >
                       {b.name || `Zone ${i + 1}`}
                     </button>
                     {pendingBboxes.length > 1 && (
                       <button
-                        className="button is-small is-danger is-light"
+                        className="or-btn or-btn-danger or-btn-sm or-btn-icon-only"
                         onClick={() => removeBbox(i)}
                         title="Supprimer cette zone"
-                      >✕</button>
+                      >
+                        <X size={12} />
+                      </button>
                     )}
                   </div>
                 ))}
-                <button className="button is-small is-info is-light" onClick={addBbox} title="Ajouter une zone">
-                  + Zone
+                <button className="or-btn or-btn-secondary or-btn-sm" onClick={addBbox} title="Ajouter une zone">
+                  <Plus size={14} />
+                  <span>Zone</span>
                 </button>
               </div>
 
@@ -362,7 +374,7 @@ export default function AdminCataloguePage() {
               {pendingBboxes[activeBboxIdx] && (
                 <div className="mb-2">
                   <input
-                    className="input is-small"
+                    className="or-input or-input-sm"
                     value={pendingBboxes[activeBboxIdx].name}
                     onChange={e => renameBboxAt(activeBboxIdx, e.target.value)}
                     placeholder="Nom de la zone"
@@ -392,16 +404,17 @@ export default function AdminCataloguePage() {
                 ))}
               </div>
 
-              <div className="mt-2 is-flex is-align-items-center" style={{ gap: 8 }}>
+              <div className="or-flex or-gap-2" style={{ marginTop: '0.5rem' }}>
                 <button
-                  className={`button is-warning is-small ${savingBbox ? 'is-loading' : ''}`}
+                  className={`or-btn or-btn-warning or-btn-sm ${savingBbox ? 'is-loading' : ''}`}
                   onClick={saveBboxes}
                   disabled={savingBbox || pendingBboxes.length === 0}
                 >
-                  Sauvegarder les zones
+                  <Save size={14} />
+                  <span>Sauvegarder les zones</span>
                 </button>
                 {pendingBboxes[activeBboxIdx] && (
-                  <span className="is-size-7 has-text-grey">
+                  <span style={{ fontSize: '.8rem', color: '#6b7280' }}>
                     {pendingBboxes[activeBboxIdx].x1},{pendingBboxes[activeBboxIdx].y1} → {pendingBboxes[activeBboxIdx].x2},{pendingBboxes[activeBboxIdx].y2}
                   </span>
                 )}
@@ -410,7 +423,7 @@ export default function AdminCataloguePage() {
 
             {/* Colonne droite : builder sur le crop de la zone active */}
             <div className="column is-half">
-              <p className="is-size-7 has-text-grey mb-1">
+              <p style={{ fontSize: '.8rem', color: '#6b7280', marginBottom: '0.25rem' }}>
                 Cliquez sur le crop pour ajouter des séparateurs de colonnes.
               </p>
               {committedBboxes[activeBboxIdx] && (
@@ -426,61 +439,61 @@ export default function AdminCataloguePage() {
           </div>
 
           {rerunMsg && (
-            <div className={`notification is-size-7 py-2 px-3 mt-3 ${rerunMsg.startsWith('✅') ? 'is-success is-light' : 'is-danger is-light'}`}>
+            <div className={`or-alert ${rerunStatus === 'success' ? 'or-alert-success' : 'or-alert-error'}`} style={{ marginBottom: '1rem' }}>
+              {rerunStatus === 'success' ? <CheckCircle size={15} className="or-alert-icon" /> : <AlertCircle size={15} className="or-alert-icon" />}
               {rerunMsg}
             </div>
           )}
 
           {rerunProgress && (
             <div className="mt-2">
-              <p className="is-size-7 has-text-grey mb-1">{rerunProgress.done} / {rerunProgress.total} pages traitées</p>
-              <progress className="progress is-info is-small" value={rerunProgress.done} max={rerunProgress.total} />
+              <p style={{ fontSize: '.8rem', color: '#6b7280', marginBottom: '0.25rem' }}>{rerunProgress.done} / {rerunProgress.total} pages traitées</p>
+              <progress className="or-progress" value={rerunProgress.done} max={rerunProgress.total} />
             </div>
           )}
 
-          <div className="mt-3 is-flex" style={{ gap: 8 }}>
+          <div className="or-flex or-gap-2" style={{ marginTop: '1rem' }}>
             <button
-              className={`button is-primary is-small ${savingTemplate ? 'is-loading' : ''}`}
+              className={`or-btn or-btn-primary or-btn-sm ${savingTemplate ? 'is-loading' : ''}`}
               onClick={saveAndRerun}
               disabled={savingTemplate || !templateDraft}
             >
-              Sauvegarder et relancer l'OCR sur tout le catalogue
+              <RotateCcw size={14} />
+              <span>Sauvegarder et relancer l'OCR sur tout le catalogue</span>
             </button>
-            <button className="button is-light is-small" onClick={() => setShowTemplateBuilder(false)}>
+            <button className="or-btn or-btn-secondary or-btn-sm" onClick={() => setShowTemplateBuilder(false)}>
               Annuler
             </button>
           </div>
         </div>
       )}
 
-      <div className="box mb-4">
+      <div className="or-box" style={{ marginBottom: '1.5rem' }}>
         <p className="mb-2">{totalCorr} / {totalRefs} références corrigées ({pct}%)</p>
-        <progress className="progress is-success" value={pct} max={100}>{pct}%</progress>
+        <progress className="or-progress is-success" value={pct} max={100}>{pct}%</progress>
       </div>
 
-      <div className="tabs mb-4">
-        <ul>
-          {[['all', 'Toutes'], ['uncorrected', 'À corriger'], ['corrected', 'Corrigées']].map(([v, l]) => (
-            <li key={v} className={filter === v ? 'is-active' : ''}>
-              <a onClick={() => setFilter(v)}>{l}</a>
-            </li>
-          ))}
-        </ul>
+      <div className="or-tabs">
+        {[['all', 'Toutes'], ['uncorrected', 'À corriger'], ['corrected', 'Corrigées']].map(([v, l]) => (
+          <button key={v} className={`or-tab${filter === v ? ' active' : ''}`} onClick={() => setFilter(v)}>{l}</button>
+        ))}
       </div>
 
-      <table className="table is-fullwidth is-hoverable">
-        <thead>
-          <tr><th>Page</th><th>Titre</th><th>Type</th><th>Refs</th><th>Corrigées</th><th></th></tr>
-        </thead>
-        <tbody>
-          {filtered.map(p => (
-            <tr key={p.id}>
-              <td>{p.numero}</td>
-              <td>{p.titre}</td>
-              <td>
-                {editingTypeId === p.id ? (
-                  <div className="select is-small">
+      <div className="or-box" style={{ padding: 0, overflow: 'hidden' }}>
+        <table className="or-table">
+          <thead>
+            <tr><th>Page</th><th>Titre</th><th>Type</th><th>Refs</th><th>Corrigées</th><th></th></tr>
+          </thead>
+          <tbody>
+            {filtered.map(p => (
+              <tr key={p.id}>
+                <td>{p.numero}</td>
+                <td>{p.titre}</td>
+                <td>
+                  {editingTypeId === p.id ? (
                     <select
+                      className="or-select"
+                      style={{ fontSize: '.8rem' }}
                       autoFocus
                       value={p.type || ''}
                       onChange={e => changePageType(p.id, e.target.value)}
@@ -494,33 +507,34 @@ export default function AdminCataloguePage() {
                       <option value="view_only">Vue éclatée</option>
                       <option value="mixed">Mixte</option>
                     </select>
-                  </div>
-                ) : (
-                  <span
-                    className="tag is-light"
-                    style={{ cursor: 'pointer' }}
-                    title="Cliquer pour modifier le type"
-                    onClick={() => setEditingTypeId(p.id)}
-                  >
-                    {p.type || '—'}
+                  ) : (
+                    <span
+                      className="or-badge or-badge-neutral"
+                      style={{ cursor: 'pointer' }}
+                      title="Cliquer pour modifier le type"
+                      onClick={() => setEditingTypeId(p.id)}
+                    >
+                      {p.type || '—'}
+                    </span>
+                  )}
+                </td>
+                <td>{p.nb_refs}</td>
+                <td>
+                  <span style={{ color: p.nb_corriges === p.nb_refs && p.nb_refs > 0 ? '#15803d' : '#a16207' }}>
+                    {p.nb_corriges}
                   </span>
-                )}
-              </td>
-              <td>{p.nb_refs}</td>
-              <td>
-                <span className={p.nb_corriges === p.nb_refs && p.nb_refs > 0 ? 'has-text-success' : 'has-text-warning'}>
-                  {p.nb_corriges}
-                </span>
-              </td>
-              <td>
-                <Link to={`/admin/page/${p.id}/edit`} className="button is-small is-info is-light">
-                  Éditer
-                </Link>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+                </td>
+                <td>
+                  <Link to={`/admin/page/${p.id}/edit`} className="or-btn or-btn-secondary or-btn-sm">
+                    <PenSquare size={14} />
+                    <span>Éditer</span>
+                  </Link>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }

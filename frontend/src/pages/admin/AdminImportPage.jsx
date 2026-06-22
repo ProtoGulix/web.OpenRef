@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { Upload, AlertCircle } from 'lucide-react'
 
 export default function AdminImportPage() {
   const navigate = useNavigate()
@@ -33,59 +34,69 @@ export default function AdminImportPage() {
 
   return (
     <div style={{ maxWidth: 640 }}>
-      <h1 className="title">Importer un catalogue</h1>
-
-      <form onSubmit={startImport}>
-        <div className="field">
-          <label className="label">Nom du catalogue</label>
-          <input className="input" required value={form.name} onChange={field('name')} placeholder="Land Rover Series I — Parts Catalogue" />
+      <div className="or-page-header">
+        <div>
+          <h1 className="or-page-title">Importer un catalogue</h1>
+          <p className="or-page-subtitle">PDF scanné ou natif, images</p>
         </div>
-        <div className="columns">
-          <div className="column field">
-            <label className="label">Marque</label>
-            <div className="select is-fullwidth">
-              <select value={form.marque} onChange={field('marque')}>
+      </div>
+
+      <div className="or-box">
+        <form onSubmit={startImport}>
+          <div className="or-field">
+            <label className="or-label">Nom du catalogue</label>
+            <input className="or-input" required value={form.name} onChange={field('name')} placeholder="Land Rover Series I — Parts Catalogue" />
+          </div>
+
+          <div className="columns">
+            <div className="column or-field">
+              <label className="or-label">Marque</label>
+              <select className="or-select" value={form.marque} onChange={field('marque')}>
                 <option value="landrover">Land Rover</option>
                 <option value="motobecane">Motobécane</option>
               </select>
             </div>
+            <div className="column or-field">
+              <label className="or-label">Modèle</label>
+              <input className="or-input" value={form.modele} onChange={field('modele')} placeholder="Series I" />
+            </div>
           </div>
-          <div className="column field">
-            <label className="label">Modèle</label>
-            <input className="input" value={form.modele} onChange={field('modele')} placeholder="Series I" />
-          </div>
-        </div>
-        <div className="columns">
-          <div className="column field">
-            <label className="label">Année début</label>
-            <input className="input" type="number" value={form.annee_debut} onChange={field('annee_debut')} placeholder="1948" />
-          </div>
-          <div className="column field">
-            <label className="label">Année fin</label>
-            <input className="input" type="number" value={form.annee_fin} onChange={field('annee_fin')} placeholder="1953" />
-          </div>
-          <div className="column field">
-            <label className="label">Langue</label>
-            <div className="select is-fullwidth">
-              <select value={form.langue} onChange={field('langue')}>
+
+          <div className="columns">
+            <div className="column or-field">
+              <label className="or-label">Année début</label>
+              <input className="or-input" type="number" value={form.annee_debut} onChange={field('annee_debut')} placeholder="1948" />
+            </div>
+            <div className="column or-field">
+              <label className="or-label">Année fin</label>
+              <input className="or-input" type="number" value={form.annee_fin} onChange={field('annee_fin')} placeholder="1953" />
+            </div>
+            <div className="column or-field">
+              <label className="or-label">Langue</label>
+              <select className="or-select" value={form.langue} onChange={field('langue')}>
                 <option value="fr">Français</option>
                 <option value="en">English</option>
                 <option value="es">Español</option>
               </select>
             </div>
           </div>
-        </div>
-        <div className="field">
-          <label className="label">Fichier PDF</label>
-          <input className="input" type="file" accept=".pdf,image/*" onChange={e => setFile(e.target.files[0])} />
-        </div>
 
-        {error && <div className="notification is-danger">{error}</div>}
+          <div className="or-field">
+            <label className="or-label">Fichier PDF ou image</label>
+            <input className="or-input" type="file" accept=".pdf,image/*" onChange={e => setFile(e.target.files[0])} />
+          </div>
 
-        <button className={`button is-dark ${importing ? 'is-loading' : ''}`} type="submit" disabled={importing}>
-          Lancer l'import
-        </button>
-      </form>
+          {error && (
+            <div className="or-alert or-alert-error" style={{ marginBottom: '1rem' }}>
+              <AlertCircle size={15} className="or-alert-icon" /> {error}
+            </div>
+          )}
+
+          <button className={`or-btn or-btn-primary${importing ? ' is-loading' : ''}`} type="submit" disabled={importing}>
+            <Upload size={15} /> Lancer l'import
+          </button>
+        </form>
+      </div>
     </div>
   )
 }
