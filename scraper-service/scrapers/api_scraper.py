@@ -134,6 +134,45 @@ async def _scrape_rp(client: httpx.AsyncClient, ref: str) -> list[dict]:
     return items
 
 
+# ── Rimmer Bros (ASMX autocomplete) ──────────────────────────────────────────
+async def _scrape_rb(client: httpx.AsyncClient, ref: str) -> list[dict]:
+    url = "https://rimmerbros.com/MCWebServices/SearchAutoCompleteService.asmx/GetSearchSuggestions"
+    r = await client.post(
+        url,
+        content=json.dumps({"value": ref, "isMobile": "false"}),
+        headers={
+            "Content-Type": "application/json; charset=utf-8",
+            "X-Requested-With": "XMLHttpRequest",
+            "Origin": "https://rimmerbros.com",
+            "Referer": f"https://rimmerbros.com/Item--i-{ref}",
+        },
+        timeout=15,
+    )
+    r.raise_for_status()
+    data = r.json()
+    items = []
+    for p in data.get("d", {}).get("ProductSuggestion", []):
+        raw_price = p.get("WebPrice", "")
+        # WebPrice format: "&#163;20.90" (£ HTML entity)
+        price_str = re.sub(r"[^\d.]", "", raw_price.replace("&#163;", "").replace("&pound;", ""))
+        try:
+            price = float(price_str)
+        except ValueError:
+            price = 0.0
+        image = p.get("Image", "").strip("'")
+        if image and image.startswith("//"):
+            image = "https:" + image
+        items.append({
+            "link": f"https://rimmerbros.com/{p.get('Url', '')}",
+            "price": price,
+            "name": p.get("Text", ""),
+            "ref": p.get("ItemNo", ref),
+            "image": image,
+            "manufacturer": "",
+        })
+    return items
+
+
 # ── Dispatch ──────────────────────────────────────────────────────────────────
 _ADAPTERS = {
     "jc":  _scrape_jc,
@@ -141,6 +180,7 @@ _ADAPTERS = {
     "ls":  _scrape_ls,
     "bol": _scrape_bol,
     "rp":  _scrape_rp,
+    "rb":  _scrape_rb,
 }
 
 

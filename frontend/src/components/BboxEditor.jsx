@@ -17,7 +17,7 @@ function handleCursor(pos) {
  *   displayW/H : dimensions d'affichage (CSS) de l'image
  *   onChange   : (newBbox) => void  — appelé à chaque fin de drag
  */
-export default function BboxEditor({ bbox, imageW, imageH, displayW, displayH, onChange, inactive = false }) {
+export default function BboxEditor({ bbox, imageW, imageH, displayW, displayH, onChange, inactive = false, color: colorProp }) {
   const containerRef = useRef(null)
   const dragRef = useRef(null)  // { type: 'move'|handle, startX, startY, startBbox }
 
@@ -143,8 +143,9 @@ export default function BboxEditor({ bbox, imageW, imageH, displayW, displayH, o
     w:  [dr.x1, (dr.y1 + dr.y2) / 2],
   }
 
-  const color = inactive ? 'rgba(156,163,175,0.7)' : 'rgba(59,130,246,0.9)'
-  const bgColor = inactive ? 'rgba(156,163,175,0.06)' : 'rgba(59,130,246,0.08)'
+  const activeColor = colorProp || '#3b82f6'
+  const color = inactive ? 'rgba(156,163,175,0.7)' : activeColor + 'e6'
+  const bgColor = inactive ? 'rgba(156,163,175,0.06)' : activeColor + '18'
 
   return (
     <div ref={containerRef} style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
@@ -176,7 +177,7 @@ export default function BboxEditor({ bbox, imageW, imageH, displayW, displayH, o
               top: hy - HANDLE_SIZE / 2,
               width: HANDLE_SIZE,
               height: HANDLE_SIZE,
-              background: '#3b82f6',
+              background: activeColor,
               border: '1px solid #fff',
               borderRadius: 2,
               cursor: handleCursor(h),
@@ -191,7 +192,7 @@ export default function BboxEditor({ bbox, imageW, imageH, displayW, displayH, o
         <div style={{
           position: 'absolute',
           left: dr.x1, top: dr.y1 - 20,
-          background: 'rgba(59,130,246,0.85)', color: '#fff',
+          background: activeColor + 'd9', color: '#fff',
           fontSize: 10, padding: '1px 5px', borderRadius: 2,
           pointerEvents: 'none', whiteSpace: 'nowrap',
         }}>

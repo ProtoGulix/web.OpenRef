@@ -8,8 +8,12 @@ const COLUMN_ROLES = {
   remarks:     { label: 'Remarques', color: '#ef4444' },
 }
 
-export default function PageViewer({ page, refs = [], blocs = [], onRefClick, showNomenclature = true, columnTemplate = null }) {
-  const [hovered, setHovered] = useState(null)
+export default function PageViewer({
+  page, refs = [], blocs = [], refsVues = [],
+  onRefClick, onRepereClick,
+  selectedNomencId = null, selectedRepereId = null,
+  showNomenclature = true, columnTemplate = null,
+}) {
   const [hoveredBloc, setHoveredBloc] = useState(null)
   const imgRef = useRef(null)
   const [imgSize, setImgSize] = useState({ w: 1, h: 1, natW: 1, natH: 1 })
@@ -147,8 +151,6 @@ export default function PageViewer({ page, refs = [], blocs = [], onRefClick, sh
           <div
             key={ref.id}
             onClick={() => onRefClick?.(ref)}
-            onMouseEnter={() => setHovered(ref.id)}
-            onMouseLeave={() => setHovered(null)}
             title={`${ref.plate_ref} — ${ref.part_number}`}
             style={{
               position: 'absolute',
@@ -157,14 +159,51 @@ export default function PageViewer({ page, refs = [], blocs = [], onRefClick, sh
               width: `${(ref.width ?? 30) / 10}%`,
               height: `${(ref.height ?? 15) / 10}%`,
               border: '2px solid',
-              borderColor: hovered === ref.id ? '#3273dc' : 'rgba(50,115,220,0.7)',
-              background: hovered === ref.id ? 'rgba(50,115,220,0.15)' : 'transparent',
+              borderColor: selectedNomencId === ref.id ? '#3273dc' : 'rgba(50,115,220,0.7)',
+              background: selectedNomencId === ref.id ? 'rgba(50,115,220,0.15)' : 'transparent',
               cursor: 'pointer',
               boxSizing: 'border-box',
             }}
           />
         ) : null
       ))}
+
+      {/* Overlay repères schéma */}
+      {refsVues.filter(r => r.pos_x != null && r.pos_y != null).map(r => {
+        const isSelected = selectedRepereId === r.id
+        const hasLink = !!r.nomenclature_id
+        return (
+          <div
+            key={r.id}
+            onClick={() => onRepereClick?.(r)}
+            title={hasLink ? `Repère ${r.part_number} → ${r.nomenc_part_number || r.part_number}` : `Repère ${r.part_number} (non lié)`}
+            style={{
+              position: 'absolute',
+              left: Math.round(r.pos_x * scaleX),
+              top: Math.round(r.pos_y * scaleY),
+              transform: 'translate(-50%, -50%)',
+              background: isSelected ? '#6d28d9' : hasLink ? '#8b5cf6' : '#9ca3af',
+              color: '#fff',
+              borderRadius: '50%',
+              width: isSelected ? 24 : 20,
+              height: isSelected ? 24 : 20,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: isSelected ? 11 : 10,
+              fontWeight: 'bold',
+              border: isSelected ? '2px solid #fff' : '1.5px solid rgba(255,255,255,0.8)',
+              boxShadow: isSelected ? '0 0 0 3px #6d28d9' : '0 1px 4px rgba(0,0,0,0.35)',
+              cursor: hasLink ? 'pointer' : 'default',
+              userSelect: 'none',
+              zIndex: 12,
+              transition: 'all 0.1s',
+            }}
+          >
+            {r.part_number}
+          </div>
+        )
+      })}
 
       {/* Tooltip bloc au survol */}
       {hoveredBloc && (() => {

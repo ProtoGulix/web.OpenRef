@@ -92,16 +92,17 @@ def _ocr_full_page(img_path: str) -> list[dict]:
     return blocs
 
 
-def _find_header_line(blocs: list[dict]) -> int | None:
+def _find_header_line(blocs: list[dict], min_keywords: int = 2) -> int | None:
     """
-    Retourne le bas du header (max de top+height) si ≥ 2 mots-clés distincts
-    sur la même ligne horizontale. Utilisé comme y_header pour filtrer les blocs
-    de données qui commencent APRÈS le header.
+    Retourne le bas du header (max de top+height) si ≥ min_keywords mots-clés distincts
+    sur la même ligne horizontale.
+
+    min_keywords peut être abaissé à 1 quand un gabarit est disponible : on cherche
+    alors n'importe quel seul keyword de nomenclature pour localiser la ligne header.
     """
     if not blocs:
         return None
 
-    # Grouper par Y
     sorted_blocs = sorted(blocs, key=lambda b: b["top"])
     groups: list[list[dict]] = []
     current: list[dict] = [sorted_blocs[0]]
@@ -115,16 +116,15 @@ def _find_header_line(blocs: list[dict]) -> int | None:
     groups.append(current)
 
     best_y_bottom = None
-    best_count = 1
+    best_count = min_keywords - 1
 
     for group in groups:
         matched_kws = set()
         for b in group:
             for m in _KW_RE.finditer(b["text"]):
                 matched_kws.add(m.group().upper().replace(" ", "").replace(".", "").replace("-", ""))
-        if len(matched_kws) >= 2 and len(matched_kws) > best_count:
+        if len(matched_kws) >= min_keywords and len(matched_kws) > best_count:
             best_count = len(matched_kws)
-            # On retourne le bas du header (y1 de la table = juste après le header)
             best_y_bottom = max(b["top"] + b["height"] for b in group)
 
     return best_y_bottom
@@ -375,10 +375,78 @@ def _find_structured_table(blocs: list[dict]) -> dict | None:
     return {"x1": max(0, x1), "y1": max(0, y1), "x2": x2, "y2": y2}
 
 
-def _detect_page(img_path: str) -> dict:
-    """Pipeline complet de détection pour une page."""
+_MIN_LETTERS = re.compile(r'[A-Za-zÀ-ÿ]{2,}')
+
+
+def _ocr_zone(img_path: str, bbox: dict, for_number: bool = False) -> str | None:
+    """
+    Crop la zone définie dans le gabarit, applique preprocessing
+    (agrandissement x4 + seuillage) et lance un OCR ciblé (PSM 7).
+    """
+    try:
+        pil = Image.open(img_path)
+        x1, y1, x2, y2 = bbox["x1"], bbox["y1"], bbox["x2"], bbox["y2"]
+        crop = pil.crop((x1, y1, x2, y2))
+        crop = crop.resize((crop.width * 4, crop.height * 4), Image.LANCZOS)
+        arr = cv2.cvtColor(np.array(crop), cv2.COLOR_RGB2GRAY)
+        _, thresh = cv2.threshold(arr, 180, 255, cv2.THRESH_BINARY)
+        thresh_img = Image.fromarray(thresh)
+
+        if for_number:
+            raw = pytesseract.image_to_string(thresh_img, config='--psm 7')
+            digits = re.sub(r"[^\d]", "", raw)
+            return digits if digits else None
+        else:
+            raw = pytesseract.image_to_string(thresh_img, config='--psm 6')
+            tokens = []
+            for t in raw.split():
+                t = t.strip()
+                if len(t) >= 3 and _MIN_LETTERS.search(t):
+                    cleaned = re.sub(r'^[^A-Za-zÀ-ÿ0-9]+|[^A-Za-zÀ-ÿ0-9\)]+$', '', t)
+                    if cleaned and len(cleaned) >= 2:
+                        tokens.append(cleaned)
+            return " ".join(tokens) if tokens else None
+    except Exception:
+        return None
+
+
+def _extract_meta_from_blocks(_blocs: list[dict], column_template: dict | None,
+                               img_path: str | None = None) -> dict:
+    """
+    Extrait le titre et le numéro de page en faisant un OCR ciblé
+    (crop + preprocessing) sur les zones définies dans le gabarit.
+    Les blocs pleine page ne sont pas utilisés — chaque zone est traitée
+    indépendamment directement sur l'image.
+    """
+    result = {"titre": None, "numero_ocr": None}
+    if not column_template or not img_path:
+        return result
+
+    title_bbox = column_template.get("title_bbox")
+    page_number_bbox = column_template.get("page_number_bbox")
+
+    if title_bbox:
+        result["titre"] = _ocr_zone(img_path, title_bbox, for_number=False)
+    if page_number_bbox:
+        result["numero_ocr"] = _ocr_zone(img_path, page_number_bbox, for_number=True)
+
+    return result
+
+
+def _detect_page(img_path: str, column_template: dict | None = None) -> dict:
+    """
+    Pipeline complet de détection pour une page.
+
+    Si column_template est fourni (gabarit de pattern défini par l'utilisateur),
+    on assouplit la détection du header : 1 seul keyword suffit au lieu de 2,
+    car on sait déjà à quoi ressemble la nomenclature de ce catalogue.
+    """
     blocs = _ocr_full_page(img_path)
-    y_header = _find_header_line(blocs)
+    meta = _extract_meta_from_blocks(blocs, column_template, img_path)
+
+    # Avec gabarit : min_keywords=1 pour trouver le header même si OCR partiel
+    min_kw = 1 if column_template else 2
+    y_header = _find_header_line(blocs, min_keywords=min_kw)
 
     if y_header is None:
         # Fallback : détecter par pattern structurel (catalogue sans header)
@@ -391,6 +459,7 @@ def _detect_page(img_path: str) -> dict:
                 "nomenclature_bboxes": [],
                 "exclusion_zones": [],
                 "raw_ocr_blocks": blocs,
+                **meta,
             }
         page_type, has_nomenclature = _classify_page(blocs, struct_bbox)
         named_bbox = {**struct_bbox, "name": "Nomenclature"}
@@ -401,6 +470,7 @@ def _detect_page(img_path: str) -> dict:
             "nomenclature_bboxes": [named_bbox],
             "exclusion_zones": [struct_bbox],
             "raw_ocr_blocks": blocs,
+            **meta,
         }
 
     # y_header = bas du header ; on cherche aussi le haut et l'étendue X pour la bbox
@@ -430,6 +500,7 @@ def _detect_page(img_path: str) -> dict:
         "nomenclature_bboxes": [named_bbox],
         "exclusion_zones": [bbox],
         "raw_ocr_blocks": blocs,
+        **meta,
     }
 
 
@@ -440,6 +511,13 @@ async def _stream_detect(catalogue_id: int) -> AsyncGenerator[str, None]:
     loop = asyncio.get_event_loop()
 
     try:
+        # Charger le gabarit du catalogue s'il existe
+        cat_row = await db.fetchrow("SELECT column_template FROM catalogue WHERE id=$1", catalogue_id)
+        column_template = None
+        if cat_row and cat_row["column_template"]:
+            tmpl = cat_row["column_template"]
+            column_template = json.loads(tmpl) if isinstance(tmpl, str) else dict(tmpl)
+
         pages = await db.fetch(
             """SELECT id, numero, image FROM page
                WHERE id_catalogue=$1 AND process_status IN ('pending', 'deskewed')
@@ -456,7 +534,7 @@ async def _stream_detect(catalogue_id: int) -> AsyncGenerator[str, None]:
             async with sem:
                 img_path = str(STORAGE_ROOT / str(catalogue_id) / Path(row["image"]).name)
                 return await loop.run_in_executor(
-                    _executor, _detect_page, img_path
+                    _executor, _detect_page, img_path, column_template
                 )
 
         tasks = {asyncio.ensure_future(detect_one(dict(p))): dict(p) for p in pages}
@@ -478,14 +556,18 @@ async def _stream_detect(catalogue_id: int) -> AsyncGenerator[str, None]:
                                nomenclature_bboxes=$4,
                                exclusion_zones=$5,
                                raw_ocr_blocks=$6,
-                               process_status='detected'
-                           WHERE id=$7""",
+                               process_status='detected',
+                               titre=COALESCE($7, titre),
+                               numero=COALESCE($8::int, numero)
+                           WHERE id=$9""",
                         result["page_type"],
                         result["has_nomenclature"],
                         json.dumps(result["nomenclature_bbox"]) if result["nomenclature_bbox"] else None,
                         json.dumps(result["nomenclature_bboxes"]),
                         json.dumps(result["exclusion_zones"]),
                         json.dumps(result["raw_ocr_blocks"]),
+                        result.get("titre"),
+                        int(result["numero_ocr"]) if result.get("numero_ocr") and str(result["numero_ocr"]).isdigit() else None,
                         page_row["id"],
                     )
                     yield f"data: {json.dumps({'type': 'page_detected', 'page_id': page_row['id'], 'page_num': page_row['numero'], 'page_type': result['page_type'], 'has_nomenclature': result['has_nomenclature']})}\n\n"
@@ -505,3 +587,39 @@ async def detect_catalogue(catalogue_id: int = Form(...)):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.post("/extract-meta/page")
+async def extract_meta_page(page_id: int = Form(...), column_template: str = Form(None)):
+    """
+    Extrait titre et numéro de page depuis les raw_ocr_blocks déjà stockés en BDD,
+    en appliquant les zones title_bbox / page_number_bbox du gabarit.
+    Met à jour page.titre et page.numero (COALESCE : ne remplace pas les valeurs
+    saisies manuellement si la zone ne retourne rien).
+    """
+    db = await _get_db()
+    try:
+        row = await db.fetchrow("SELECT raw_ocr_blocks, image FROM page WHERE id=$1", page_id)
+        if not row:
+            return {"error": "Page not found"}
+
+        tmpl = json.loads(column_template) if column_template else None
+        blocs = json.loads(row["raw_ocr_blocks"]) if isinstance(row["raw_ocr_blocks"], str) else (row["raw_ocr_blocks"] or [])
+        img_path = row["image"] if row["image"] else None
+        meta = _extract_meta_from_blocks(blocs, tmpl, img_path=img_path)
+
+        num_raw = meta.get("numero_ocr")
+        num_int = int(num_raw) if num_raw and num_raw.isdigit() else None
+        await db.execute(
+            """UPDATE page SET
+                   titre=COALESCE($1, titre),
+                   numero=COALESCE($2, numero)
+               WHERE id=$3""",
+            meta.get("titre"),
+            num_int,
+            page_id,
+        )
+        updated = await db.fetchrow("SELECT titre, numero FROM page WHERE id=$1", page_id)
+        return {"titre": updated["titre"], "numero": updated["numero"], **meta}
+    finally:
+        await db.close()

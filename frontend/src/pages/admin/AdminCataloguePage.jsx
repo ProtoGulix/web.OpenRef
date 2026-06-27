@@ -50,9 +50,31 @@ export default function AdminCataloguePage() {
   const [displaySize, setDisplaySize] = useState(null)
   const [naturalSize, setNaturalSize] = useState(null)
   const [savingBbox, setSavingBbox] = useState(false)
+  // Zones titre, numéro de page et schéma (coordonnées en pixels naturels)
+  const [titleBbox, setTitleBbox] = useState(null)
+  const [pageNumBbox, setPageNumBbox] = useState(null)
+  const [schemaBbox, setSchemaBbox] = useState(null)
+  // Quel éditeur de zone méta est actif : null | 'title' | 'page_number' | 'schema'
+  const [activeMetaZone, setActiveMetaZone] = useState(null)
 
-  // Édition type de page inline
+  // Édition inline des pages dans la table
   const [editingTypeId, setEditingTypeId] = useState(null)
+  const [pageDrafts, setPageDrafts] = useState({})
+
+  const getPageDraft = (p) => pageDrafts[p.id] ?? { numero: p.numero ?? '', titre: p.titre ?? '' }
+
+  const setPageDraftField = (pageId, field, value) =>
+    setPageDrafts(d => ({ ...d, [pageId]: { ...getPageDraft({ id: pageId }), [field]: value } }))
+
+  const savePageMeta = async (p) => {
+    const draft = getPageDraft(p)
+    const body = {}
+    if (String(draft.numero) !== String(p.numero ?? '')) body.numero = draft.numero !== '' ? Number(draft.numero) : null
+    if (draft.titre !== (p.titre ?? '')) body.titre = draft.titre || null
+    if (!Object.keys(body).length) return
+    const updated = await api.patchPage(p.id, body)
+    setPages(ps => ps.map(pg => pg.id === p.id ? { ...pg, titre: updated.titre, numero: updated.numero } : pg))
+  }
 
   const changePageType = async (pageId, newType) => {
     await api.patchPage(pageId, { type: newType || null })
@@ -165,7 +187,7 @@ export default function AdminCataloguePage() {
     setRerunProgress(null)
     try {
       const bbox = samplePage?.nomenclature_bbox
-      const template = buildTemplate(templateDraft, bbox)
+      const template = buildTemplate(templateDraft, bbox, titleBbox, pageNumBbox, schemaBbox)
       await api.patchCatalogue(id, { column_template: template })
       setCatalogue(c => ({ ...c, column_template: template }))
 
@@ -245,11 +267,28 @@ export default function AdminCataloguePage() {
           </button>
           {samplePage && (
             <button
-              className={`or-btn or-btn-sm ${showTemplateBuilder ? 'or-btn-warning' : 'or-btn-secondary'}`}
-              onClick={() => { setShowTemplateBuilder(s => !s); setRerunMsg(null); setRerunStatus(null) }}
+              className={`or-btn or-btn-sm ${showTemplateBuilder ? 'or-btn-warning' : catalogue?.column_template ? 'or-btn-success' : 'or-btn-secondary'}`}
+              onClick={() => {
+                setShowTemplateBuilder(s => {
+                  if (!s && catalogue?.column_template) {
+                    setTitleBbox(catalogue.column_template.title_bbox ?? null)
+                    setPageNumBbox(catalogue.column_template.page_number_bbox ?? null)
+                    setSchemaBbox(catalogue.column_template.schema_bbox ?? null)
+                  }
+                  return !s
+                })
+                setRerunMsg(null)
+                setRerunStatus(null)
+              }}
             >
               {showTemplateBuilder ? <X size={14} /> : <TableProperties size={14} />}
-              <span>{showTemplateBuilder ? 'Fermer le gabarit' : 'Gabarit colonnes'}</span>
+              <span>
+                {showTemplateBuilder
+                  ? 'Fermer le gabarit'
+                  : catalogue?.column_template
+                    ? '✓ Gabarit défini'
+                    : 'Gabarit colonnes'}
+              </span>
             </button>
           )}
         </div>
@@ -292,7 +331,7 @@ export default function AdminCataloguePage() {
 
           {catalogue?.column_template && (
             <p style={{ fontSize: '.8rem', color: '#a16207', marginBottom: '0.5rem' }}>
-              Gabarit existant : {Object.entries(catalogue.column_template).map(([k, v]) => `${k}=${v}`).join(', ')}
+              Gabarit existant : {(catalogue.column_template.columns ?? []).map(c => c.role).join(' → ')}
             </p>
           )}
 
@@ -389,7 +428,7 @@ export default function AdminCataloguePage() {
                   alt={`Page ${samplePage.numero}`}
                   onMeasure={(nat, disp) => { setNaturalSize(nat); setDisplaySize(disp) }}
                 />
-                {/* Un BboxEditor par zone, seule la zone active est interactive */}
+                {/* Zones nomenclature — actives quand aucune zone méta n'est sélectionnée */}
                 {displaySize && naturalSize && pendingBboxes.map((b, i) => (
                   <BboxEditor
                     key={i}
@@ -398,10 +437,52 @@ export default function AdminCataloguePage() {
                     imageH={naturalSize.h}
                     displayW={displaySize.w}
                     displayH={displaySize.h}
-                    onChange={i === activeBboxIdx ? (bbox) => updateBboxAt(i, bbox) : () => {}}
-                    inactive={i !== activeBboxIdx}
+                    onChange={i === activeBboxIdx && !activeMetaZone ? (bbox) => updateBboxAt(i, bbox) : () => {}}
+                    inactive={i !== activeBboxIdx || !!activeMetaZone}
                   />
                 ))}
+                {/* Zone titre */}
+                {displaySize && naturalSize && titleBbox && (
+                  <BboxEditor
+                    key="title"
+                    bbox={titleBbox}
+                    imageW={naturalSize.w}
+                    imageH={naturalSize.h}
+                    displayW={displaySize.w}
+                    displayH={displaySize.h}
+                    onChange={activeMetaZone === 'title' ? setTitleBbox : () => {}}
+                    inactive={activeMetaZone !== 'title'}
+                    color="#f59e0b"
+                  />
+                )}
+                {/* Zone numéro de page */}
+                {displaySize && naturalSize && pageNumBbox && (
+                  <BboxEditor
+                    key="page_number"
+                    bbox={pageNumBbox}
+                    imageW={naturalSize.w}
+                    imageH={naturalSize.h}
+                    displayW={displaySize.w}
+                    displayH={displaySize.h}
+                    onChange={activeMetaZone === 'page_number' ? setPageNumBbox : () => {}}
+                    inactive={activeMetaZone !== 'page_number'}
+                    color="#10b981"
+                  />
+                )}
+                {/* Zone schéma */}
+                {displaySize && naturalSize && schemaBbox && (
+                  <BboxEditor
+                    key="schema"
+                    bbox={schemaBbox}
+                    imageW={naturalSize.w}
+                    imageH={naturalSize.h}
+                    displayW={displaySize.w}
+                    displayH={displaySize.h}
+                    onChange={activeMetaZone === 'schema' ? setSchemaBbox : () => {}}
+                    inactive={activeMetaZone !== 'schema'}
+                    color="#8b5cf6"
+                  />
+                )}
               </div>
 
               <div className="or-flex or-gap-2" style={{ marginTop: '0.5rem' }}>
@@ -433,9 +514,110 @@ export default function AdminCataloguePage() {
                   imageW={naturalSize?.w || 2550}
                   imageH={naturalSize?.h || 3300}
                   onChange={setTemplateDraft}
+                  initialTemplate={catalogue?.column_template}
                 />
               )}
             </div>
+          </div>
+
+          {/* Zones titre et numéro de page */}
+          <div style={{ borderTop: '1px solid #374151', paddingTop: '1rem', marginTop: '0.5rem' }}>
+            <p style={{ fontSize: '.8rem', color: '#94a3b8', marginBottom: '0.5rem', fontWeight: 'bold' }}>
+              Zones de détection — titre et numéro de page
+            </p>
+            <p style={{ fontSize: '.75rem', color: '#6b7280', marginBottom: '0.75rem' }}>
+              Définissez où se trouvent le titre et le numéro sur chaque page. L'OCR lira ces zones pour remplir automatiquement les champs correspondants.
+            </p>
+            <div className="or-flex or-gap-2" style={{ flexWrap: 'wrap' }}>
+              {/* Bouton zone titre */}
+              <button
+                className={`or-btn or-btn-sm ${activeMetaZone === 'title' ? 'or-btn-warning' : titleBbox ? 'or-btn-success' : 'or-btn-secondary'}`}
+                onClick={() => {
+                  if (activeMetaZone === 'title') {
+                    setActiveMetaZone(null)
+                  } else {
+                    if (!titleBbox && naturalSize) {
+                      const w = naturalSize.w, h = naturalSize.h
+                      setTitleBbox({ x1: Math.round(w * 0.05), y1: Math.round(h * 0.02), x2: Math.round(w * 0.75), y2: Math.round(h * 0.08) })
+                    }
+                    setActiveMetaZone('title')
+                  }
+                }}
+              >
+                <span style={{ width: 10, height: 10, background: '#f59e0b', borderRadius: 2, display: 'inline-block', marginRight: 4 }} />
+                {titleBbox ? '✓ Zone titre' : 'Ajouter zone titre'}
+              </button>
+              {titleBbox && (
+                <button
+                  className="or-btn or-btn-ghost or-btn-sm or-btn-icon-only"
+                  title="Supprimer zone titre"
+                  onClick={() => { setTitleBbox(null); if (activeMetaZone === 'title') setActiveMetaZone(null) }}
+                >
+                  <X size={12} />
+                </button>
+              )}
+
+              {/* Bouton zone numéro de page */}
+              <button
+                className={`or-btn or-btn-sm ${activeMetaZone === 'page_number' ? 'or-btn-warning' : pageNumBbox ? 'or-btn-success' : 'or-btn-secondary'}`}
+                onClick={() => {
+                  if (activeMetaZone === 'page_number') {
+                    setActiveMetaZone(null)
+                  } else {
+                    if (!pageNumBbox && naturalSize) {
+                      const w = naturalSize.w, h = naturalSize.h
+                      setPageNumBbox({ x1: Math.round(w * 0.8), y1: Math.round(h * 0.02), x2: Math.round(w * 0.97), y2: Math.round(h * 0.07) })
+                    }
+                    setActiveMetaZone('page_number')
+                  }
+                }}
+              >
+                <span style={{ width: 10, height: 10, background: '#10b981', borderRadius: 2, display: 'inline-block', marginRight: 4 }} />
+                {pageNumBbox ? '✓ Zone numéro' : 'Ajouter zone numéro'}
+              </button>
+              {pageNumBbox && (
+                <button
+                  className="or-btn or-btn-ghost or-btn-sm or-btn-icon-only"
+                  title="Supprimer zone numéro"
+                  onClick={() => { setPageNumBbox(null); if (activeMetaZone === 'page_number') setActiveMetaZone(null) }}
+                >
+                  <X size={12} />
+                </button>
+              )}
+
+              {/* Bouton zone schéma */}
+              <button
+                className={`or-btn or-btn-sm ${activeMetaZone === 'schema' ? 'or-btn-warning' : schemaBbox ? 'or-btn-success' : 'or-btn-secondary'}`}
+                onClick={() => {
+                  if (activeMetaZone === 'schema') {
+                    setActiveMetaZone(null)
+                  } else {
+                    if (!schemaBbox && naturalSize) {
+                      const w = naturalSize.w, h = naturalSize.h
+                      setSchemaBbox({ x1: Math.round(w * 0.02), y1: Math.round(h * 0.1), x2: Math.round(w * 0.55), y2: Math.round(h * 0.85) })
+                    }
+                    setActiveMetaZone('schema')
+                  }
+                }}
+              >
+                <span style={{ width: 10, height: 10, background: '#8b5cf6', borderRadius: 2, display: 'inline-block', marginRight: 4 }} />
+                {schemaBbox ? '✓ Zone schéma' : 'Ajouter zone schéma'}
+              </button>
+              {schemaBbox && (
+                <button
+                  className="or-btn or-btn-ghost or-btn-sm or-btn-icon-only"
+                  title="Supprimer zone schéma"
+                  onClick={() => { setSchemaBbox(null); if (activeMetaZone === 'schema') setActiveMetaZone(null) }}
+                >
+                  <X size={12} />
+                </button>
+              )}
+            </div>
+            {activeMetaZone && (
+              <p style={{ fontSize: '.75rem', color: '#f59e0b', marginTop: '0.4rem' }}>
+                Faites glisser le cadre {activeMetaZone === 'title' ? 'jaune (titre)' : activeMetaZone === 'page_number' ? 'vert (numéro)' : 'violet (schéma)'} sur la page pour ajuster la zone.
+              </p>
+            )}
           </div>
 
           {rerunMsg && (
@@ -485,38 +667,48 @@ export default function AdminCataloguePage() {
             <tr><th>Page</th><th>Titre</th><th>Type</th><th>Refs</th><th>Corrigées</th><th></th></tr>
           </thead>
           <tbody>
-            {filtered.map(p => (
+            {filtered.map(p => {
+              const draft = getPageDraft(p)
+              return (
               <tr key={p.id}>
-                <td>{p.numero}</td>
-                <td>{p.titre}</td>
                 <td>
-                  {editingTypeId === p.id ? (
-                    <select
-                      className="or-select"
-                      style={{ fontSize: '.8rem' }}
-                      autoFocus
-                      value={p.type || ''}
-                      onChange={e => changePageType(p.id, e.target.value)}
-                      onBlur={() => setEditingTypeId(null)}
-                    >
-                      <option value="">— type —</option>
-                      <option value="cover">Couverture</option>
-                      <option value="index">Index</option>
-                      <option value="schema">Schéma</option>
-                      <option value="parts_list">Liste de pièces</option>
-                      <option value="view_only">Vue éclatée</option>
-                      <option value="mixed">Mixte</option>
-                    </select>
-                  ) : (
-                    <span
-                      className="or-badge or-badge-neutral"
-                      style={{ cursor: 'pointer' }}
-                      title="Cliquer pour modifier le type"
-                      onClick={() => setEditingTypeId(p.id)}
-                    >
-                      {p.type || '—'}
-                    </span>
-                  )}
+                  <input
+                    className="or-input-inline"
+                    type="text"
+                    inputMode="numeric"
+                    value={draft.numero}
+                    onChange={e => setPageDraftField(p.id, 'numero', e.target.value)}
+                    onBlur={() => savePageMeta(p)}
+                    onKeyDown={e => { if (e.key === 'Enter') e.target.blur() }}
+                    style={{ width: `${Math.max(2, (String(draft.numero).length || 1) + 0.4)}ch`, fontWeight: 600 }}
+                  />
+                </td>
+                <td>
+                  <input
+                    className="or-input-inline"
+                    value={draft.titre}
+                    onChange={e => setPageDraftField(p.id, 'titre', e.target.value)}
+                    onBlur={() => savePageMeta(p)}
+                    onKeyDown={e => { if (e.key === 'Enter') e.target.blur() }}
+                    placeholder="(sans titre)"
+                    style={{ width: '100%', minWidth: 100 }}
+                  />
+                </td>
+                <td>
+                  <select
+                    className="or-input-inline"
+                    value={p.type || ''}
+                    onChange={e => changePageType(p.id, e.target.value)}
+                    style={{ width: 'auto', fontSize: '.85rem', cursor: 'pointer' }}
+                  >
+                    <option value="">—</option>
+                    <option value="cover">Couverture</option>
+                    <option value="index">Index</option>
+                    <option value="schema">Schéma</option>
+                    <option value="parts_list">Liste de pièces</option>
+                    <option value="view_only">Vue éclatée</option>
+                    <option value="mixed">Mixte</option>
+                  </select>
                 </td>
                 <td>{p.nb_refs}</td>
                 <td>
@@ -531,7 +723,7 @@ export default function AdminCataloguePage() {
                   </Link>
                 </td>
               </tr>
-            ))}
+            )})}
           </tbody>
         </table>
       </div>
@@ -541,32 +733,30 @@ export default function AdminCataloguePage() {
 
 /**
  * Convertit le draft du builder en column_template stockable.
- * Format: { part_number: x_right, qty: x_right, description: x_right }
- * où x_right est la position absolue dans l'image (bord droit de la colonne).
- * Les zones sont triées par position.
+ * Format: { columns: [{ role, x_rel_right }], bbox_ref: { x1, y1, x2, y2 } }
+ * x_rel_right = bord droit de la colonne, relatif à la bbox (0..1).
+ * On stocke aussi la bbox de référence pour pouvoir recalculer en absolu si besoin.
  */
-function buildTemplate(draft, bbox) {
+function buildTemplate(draft, bbox, titleBbox, pageNumBbox, schemaBbox) {
   if (!draft || !bbox) return null
-  const bboxX1 = bbox.x1
-  const bboxW = bbox.x2 - bbox.x1
 
-  // draft.zones[i] contient le rôle de la zone i
-  // draft.dividers[i] = { x_rel, role } où role est le rôle de la zone À DROITE du trait
-  // zones = [zone0, zone1, ...] (length = dividers.length + 1)
-  // boundaries = [0, div[0].x_rel, div[1].x_rel, ..., 1]
   const { dividers, zones } = draft
   const boundaries = [0, ...dividers.map(d => d.x_rel), 1]
 
-  const template = {}
+  const columns = []
   zones.forEach((zone, i) => {
     if (!zone || zone.role === 'ignore') return
-    // Bord droit de cette zone = boundaries[i+1] en absolu
-    const x_right_rel = boundaries[i + 1]
-    const x_right_abs = Math.round(bboxX1 + x_right_rel * bboxW)
-    if (!template[zone.role] || x_right_abs > template[zone.role]) {
-      template[zone.role] = x_right_abs
-    }
+    columns.push({
+      role: zone.role,
+      x_rel_right: boundaries[i + 1],
+    })
   })
 
-  return template
+  return {
+    columns,
+    bbox_ref: { x1: bbox.x1, y1: bbox.y1, x2: bbox.x2, y2: bbox.y2 },
+    ...(titleBbox ? { title_bbox: titleBbox } : {}),
+    ...(pageNumBbox ? { page_number_bbox: pageNumBbox } : {}),
+    ...(schemaBbox ? { schema_bbox: schemaBbox } : {}),
+  }
 }

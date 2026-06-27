@@ -3,12 +3,97 @@ import { useParams, Link } from 'react-router-dom'
 import PageViewer from '../../components/PageViewer'
 import BboxEditor from '../../components/BboxEditor'
 import ReferenceRow from '../../components/ReferenceRow'
+import NomenclatureRow from '../../components/NomenclatureRow'
 import { api } from '../../api/client'
 import {
-  X, Square, Plus, CheckCircle, AlertCircle, RotateCcw, ChevronRight
+  X, Square, Plus, CheckCircle, AlertCircle, RotateCcw, ChevronRight, ScanSearch, Eye
 } from 'lucide-react'
 
 const NO_NOMENCLATURE_TYPES = new Set(['cover', 'index'])
+
+function ReperesOverlay({ naturalSize, displaySize, onAdd, pageId }) {
+  const [pending, setPending] = useState(null) // { px, py, cx, cy, loading, detected }
+
+  if (!naturalSize || !displaySize) return null
+  const scaleX = displaySize.w / naturalSize.w
+  const scaleY = displaySize.h / naturalSize.h
+
+  const handleClick = async (e) => {
+    if (pending) return
+    const rect = e.currentTarget.getBoundingClientRect()
+    const cx = Math.round((e.clientX - rect.left) / scaleX)
+    const cy = Math.round((e.clientY - rect.top) / scaleY)
+    const px = e.clientX - rect.left
+    const py = e.clientY - rect.top
+    setPending({ px, py, cx, cy, loading: true, detected: null, input: '' })
+    try {
+      const res = await api.ocrPoint(pageId, cx, cy)
+      setPending(p => ({ ...p, loading: false, detected: res.detected, input: res.detected ?? '' }))
+    } catch {
+      setPending(p => ({ ...p, loading: false, input: '' }))
+    }
+  }
+
+  const confirm = () => {
+    if (!pending) return
+    const num = pending.input.trim()
+    if (/^\d{1,3}$/.test(num)) {
+      onAdd({ part_number: num, pos_x: pending.cx, pos_y: pending.cy })
+    }
+    setPending(null)
+  }
+
+  return (
+    <div
+      onClick={handleClick}
+      style={{ position: 'absolute', inset: 0, cursor: 'crosshair', zIndex: 10 }}
+    >
+      {pending && (
+        <div
+          onClick={e => e.stopPropagation()}
+          style={{
+            position: 'absolute',
+            left: pending.px,
+            top: pending.py,
+            transform: 'translate(-50%, -110%)',
+            background: '#1e1b4b',
+            border: '2px solid #8b5cf6',
+            borderRadius: 8,
+            padding: '6px 10px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            zIndex: 20,
+            boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
+            minWidth: 140,
+          }}
+        >
+          {pending.loading
+            ? <span style={{ color: '#a78bfa', fontSize: 12 }}>OCR en cours…</span>
+            : <>
+                <span style={{ color: '#a78bfa', fontSize: 11 }}>Repère :</span>
+                <input
+                  autoFocus
+                  value={pending.input}
+                  onChange={e => setPending(p => ({ ...p, input: e.target.value }))}
+                  onKeyDown={e => { if (e.key === 'Enter') confirm(); if (e.key === 'Escape') setPending(null) }}
+                  style={{ width: 44, fontSize: 13, fontWeight: 'bold', textAlign: 'center', border: '1px solid #8b5cf6', borderRadius: 4, padding: '2px 4px', background: '#312e81', color: '#fff' }}
+                />
+                <button onClick={confirm} style={{ background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: 4, padding: '2px 8px', cursor: 'pointer', fontSize: 12 }}>OK</button>
+                <button onClick={() => setPending(null)} style={{ background: 'none', color: '#a78bfa', border: 'none', cursor: 'pointer', fontSize: 14, padding: '0 2px' }}>✕</button>
+              </>
+          }
+          {/* Indicateur si OCR a trouvé ou non */}
+          {!pending.loading && pending.detected !== undefined && (
+            <span style={{ position: 'absolute', top: -18, left: 0, fontSize: 10, color: pending.detected ? '#10b981' : '#f59e0b', whiteSpace: 'nowrap' }}>
+              {pending.detected ? `OCR : ${pending.detected}` : 'Non détecté — saisir manuellement'}
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
 
 function normalizeBboxes(page) {
   if (page.nomenclature_bboxes?.length) return page.nomenclature_bboxes
@@ -22,6 +107,7 @@ export default function AdminPageEditPage() {
   const [refs, setRefs] = useState([])
   const [loading, setLoading] = useState(true)
   const [blocs, setBlocs] = useState([])
+  const [refsVues, setRefsVues] = useState([])
   const [showBlocs, setShowBlocs] = useState(true)
   const [catalogue, setCatalogue] = useState(null)
   const [savingType, setSavingType] = useState(false)
@@ -38,22 +124,51 @@ export default function AdminPageEditPage() {
   const [displaySize, setDisplaySize] = useState(null)
   const [naturalSize, setNaturalSize] = useState(null)
 
+  // Édition titre / numéro de page
+  const [metaDraft, setMetaDraft] = useState({ titre: '', numero: '' })
+  const [savingMeta, setSavingMeta] = useState(false)
+  const [extractingMeta, setExtractingMeta] = useState(false)
+  const [metaMsg, setMetaMsg] = useState(null)
+  const [metaStatus, setMetaStatus] = useState(null)
+
+  // Sélection multiple nomenclature
+  const [selectedNomencIds, setSelectedNomencIds] = useState(new Set())
+
+  const toggleNomencSelect = (id, checked) =>
+    setSelectedNomencIds(s => { const n = new Set(s); checked ? n.add(id) : n.delete(id); return n })
+
+  const toggleNomencAll = (checked) =>
+    setSelectedNomencIds(checked ? new Set(refs.map(r => r.id)) : new Set())
+
+  const bulkCorrige = async (corrige) => {
+    const ids = [...selectedNomencIds]
+    const updated = await api.bulkCorrigeNomenclature(ids, corrige)
+    setRefs(rs => rs.map(r => { const u = updated.find(x => x.id === r.id); return u ?? r }))
+    setSelectedNomencIds(new Set())
+  }
+
+  // Détection refs vues (schéma)
+  const [rerunningVues, setRerunningVues] = useState(false)
+  const [vuesMsg, setVuesMsg] = useState(null)
+  const [showReperes, setShowReperes] = useState(false)
+
   useEffect(() => {
     api.getPage(id).then(pg => {
       setPage(pg)
       setPendingBboxes(normalizeBboxes(pg))
+      setMetaDraft({ titre: pg.titre || '', numero: pg.numero ?? '' })
       const refsPromise = pg.has_nomenclature
         ? api.getPageNomenclature(id)
         : api.getPageRefs(id)
-      return Promise.all([refsPromise, api.getPageBlocs(id), api.getCatalogue(pg.id_catalogue)])
+      return Promise.all([refsPromise, api.getPageBlocs(id), api.getCatalogue(pg.id_catalogue), api.getPageRefsVues(id)])
     })
-      .then(([rs, bs, cat]) => { setRefs(rs); setBlocs(bs); setCatalogue(cat) })
+      .then(([rs, bs, cat, rv]) => { setRefs(rs); setBlocs(bs); setCatalogue(cat); setRefsVues(rv) })
       .finally(() => setLoading(false))
   }, [id])
 
-  // Mesurer l'image quand on entre en mode édition bbox
+  // Mesurer l'image quand on entre en mode édition bbox ou repères
   useEffect(() => {
-    if (!editBbox) return
+    if (!editBbox && !showReperes) return
     const measure = () => {
       const img = document.querySelector('.page-viewer-img')
       if (img) {
@@ -69,7 +184,7 @@ export default function AdminPageEditPage() {
       window.removeEventListener('resize', measure)
       if (img) img.removeEventListener('load', measure)
     }
-  }, [editBbox])
+  }, [editBbox, showReperes])
 
   const changeType = async (newType) => {
     setSavingType(true)
@@ -79,6 +194,76 @@ export default function AdminPageEditPage() {
     } finally {
       setSavingType(false)
     }
+  }
+
+  const saveMeta = async () => {
+    setSavingMeta(true)
+    setMetaMsg(null)
+    try {
+      const body = {}
+      if (metaDraft.titre !== (page.titre || '')) body.titre = metaDraft.titre || null
+      if (String(metaDraft.numero) !== String(page.numero ?? '')) body.numero = metaDraft.numero !== '' ? Number(metaDraft.numero) : null
+      if (!Object.keys(body).length) return
+      const updated = await api.patchPage(id, body)
+      setPage(p => ({ ...p, titre: updated.titre, numero: updated.numero }))
+      setMetaMsg('Enregistré')
+      setMetaStatus('success')
+    } catch (e) {
+      setMetaMsg(e.message)
+      setMetaStatus('error')
+    } finally {
+      setSavingMeta(false)
+    }
+  }
+
+  const extractMeta = async () => {
+    if (!catalogue?.column_template?.title_bbox && !catalogue?.column_template?.page_number_bbox) {
+      setMetaMsg('Aucune zone de détection définie dans le gabarit du catalogue.')
+      setMetaStatus('error')
+      return
+    }
+    setExtractingMeta(true)
+    setMetaMsg(null)
+    try {
+      const result = await api.extractPageMeta(id)
+      if (result.error) throw new Error(result.error)
+      setPage(p => ({ ...p, titre: result.titre, numero: result.numero }))
+      setMetaDraft({ titre: result.titre || '', numero: result.numero ?? '' })
+      setMetaMsg(`Titre : "${result.titre || '—'}" · Numéro : ${result.numero ?? '—'}`)
+      setMetaStatus('success')
+    } catch (e) {
+      setMetaMsg(e.message)
+      setMetaStatus('error')
+    } finally {
+      setExtractingMeta(false)
+    }
+  }
+
+  const rerunVues = async () => {
+    setRerunningVues(true)
+    setVuesMsg(null)
+    try {
+      const result = await api.rerunVues(id)
+      if (result.error) throw new Error(result.error)
+      setVuesMsg(`${result.inserted} référence(s) détectée(s)`)
+      const rv = await api.getPageRefsVues(id)
+      setRefsVues(rv)
+    } catch (e) {
+      setVuesMsg(`Erreur : ${e.message}`)
+    } finally {
+      setRerunningVues(false)
+    }
+  }
+
+  const addRepere = async ({ part_number, pos_x, pos_y }) => {
+    const r = await api.addRefVue(id, { part_number, pos_x, pos_y })
+    setRefsVues(prev => [...prev, r].sort((a, b) => parseInt(a.part_number) - parseInt(b.part_number)))
+  }
+
+  const deleteRepere = async (r) => {
+    if (!window.confirm(`Supprimer le repère ${r.part_number} ?`)) return
+    await api.deleteRefVue(r.id)
+    setRefsVues(prev => prev.filter(x => x.id !== r.id))
   }
 
   const addBbox = () => {
@@ -157,16 +342,68 @@ export default function AdminPageEditPage() {
         <Link to={`/admin/catalogue/${page.id_catalogue}`}>Catalogue</Link>
         <ChevronRight size={12} />
         <span>Page {page.numero}</span>
+        <Link
+          to={`/page/${id}`}
+          title="Voir la page publique"
+          style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '.3rem', fontSize: '.8rem', color: 'var(--text-muted, #888)', textDecoration: 'none' }}
+        >
+          <Eye size={13} />
+          Vue publique
+        </Link>
       </div>
 
-      <div className="or-flex or-gap-2" style={{ marginBottom: '0.5rem' }}>
-        <h1 className="or-page-title">Page {page.numero} — {page.titre || '(sans titre)'}</h1>
+      {/* Ligne titre + actions sur une seule ligne */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem', minWidth: 0 }}>
+        {/* Titre inline éditable — prend tout l'espace dispo */}
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.3rem', flex: 1, minWidth: 0, overflow: 'hidden' }}>
+          {(catalogue?.column_template?.title_bbox || catalogue?.column_template?.page_number_bbox) && (
+            <button
+              className="or-btn or-btn-ghost"
+              onClick={extractMeta}
+              disabled={extractingMeta}
+              title="Détecter titre et numéro depuis le gabarit"
+              style={{ flexShrink: 0, alignSelf: 'center', padding: '0 4px', lineHeight: 1 }}
+            >
+              <ScanSearch size={24} />
+            </button>
+          )}
+          <span className="or-page-title" style={{ color: 'var(--text-muted)', fontWeight: 400, flexShrink: 0 }}>Page</span>
+          <input
+            className="or-input-inline"
+            type="text"
+            inputMode="numeric"
+            value={metaDraft.numero}
+            onChange={e => setMetaDraft(d => ({ ...d, numero: e.target.value }))}
+            onBlur={saveMeta}
+            onKeyDown={e => { if (e.key === 'Enter') e.target.blur() }}
+            placeholder="—"
+            style={{ width: `${Math.max(2.4, (String(metaDraft.numero).length || 1) + 0.4)}ch`, fontWeight: 700, fontSize: '1.5rem', flexShrink: 0 }}
+          />
+          <span className="or-page-title" style={{ color: 'var(--text-muted)', fontWeight: 400, flexShrink: 0 }}>—</span>
+          <input
+            className="or-input-inline"
+            value={metaDraft.titre}
+            onChange={e => setMetaDraft(d => ({ ...d, titre: e.target.value }))}
+            onBlur={saveMeta}
+            onKeyDown={e => { if (e.key === 'Enter') e.target.blur() }}
+            placeholder="(sans titre)"
+            style={{ flex: 1, minWidth: 0, fontWeight: 700, fontSize: '1.5rem' }}
+          />
+          {savingMeta && <span style={{ fontSize: '.8rem', color: 'var(--text-muted)', flexShrink: 0 }}>…</span>}
+          {!savingMeta && metaMsg && (
+            <span style={{ fontSize: '.8rem', flexShrink: 0, color: metaStatus === 'success' ? '#15803d' : '#dc2626' }}>
+              {metaStatus === 'success' ? '✓' : metaMsg}
+            </span>
+          )}
+        </div>
+
+        {/* Contrôles fixes à droite */}
         <select
           className="or-select"
-          style={{ fontSize: '.8rem' }}
           value={page.type || ''}
           onChange={e => changeType(e.target.value)}
           disabled={savingType}
+          style={{ fontSize: '.8rem', flexShrink: 0, width: 'auto' }}
         >
           <option value="">— type —</option>
           <option value="cover">Couverture</option>
@@ -176,26 +413,21 @@ export default function AdminPageEditPage() {
           <option value="view_only">Vue éclatée</option>
           <option value="mixed">Mixte</option>
         </select>
-        {savingType && <span style={{ fontSize: '.8rem', color: 'var(--text-muted)' }}>Enregistrement…</span>}
-      </div>
-
-      <div className="or-page-header" style={{ marginBottom: '0.5rem' }}>
-        <p style={{ fontSize: '.9rem', color: 'var(--text-muted)' }}>{corriges} / {nb} références corrigées</p>
-        <div className="or-flex or-gap-2">
-          {canHaveNomenclature && (
-            <button
-              className={`or-btn or-btn-sm ${editBbox ? 'or-btn-warning' : 'or-btn-secondary'}`}
-              onClick={() => { setEditBbox(e => !e); setRerunMsg(null); setRerunStatus(null) }}
-            >
-              {editBbox ? <X size={14} /> : <Square size={14} />}
-              <span>{editBbox ? 'Fermer l\'édition' : 'Zones nomenclature'}</span>
-            </button>
-          )}
-          <label className="or-muted" style={{ fontSize: '.8rem', display: 'flex', alignItems: 'center', gap: 4 }}>
-            <input type="checkbox" checked={showBlocs} onChange={e => setShowBlocs(e.target.checked)} style={{ marginRight: '4px' }} />
-            Blocs OCR ({blocs.length})
-          </label>
-        </div>
+        <span style={{ fontSize: '.85rem', color: 'var(--text-muted)', flexShrink: 0, whiteSpace: 'nowrap' }}>{corriges} / {nb} corrigées</span>
+        {canHaveNomenclature && (
+          <button
+            className={`or-btn or-btn-sm ${editBbox ? 'or-btn-warning' : 'or-btn-secondary'}`}
+            onClick={() => { setEditBbox(e => !e); setRerunMsg(null); setRerunStatus(null) }}
+            style={{ flexShrink: 0 }}
+          >
+            {editBbox ? <X size={14} /> : <Square size={14} />}
+            <span>{editBbox ? 'Fermer' : 'Zones nomenclature'}</span>
+          </button>
+        )}
+        <label style={{ fontSize: '.85rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', flexShrink: 0, whiteSpace: 'nowrap' }}>
+          <input type="checkbox" checked={showBlocs} onChange={e => setShowBlocs(e.target.checked)} />
+          Blocs OCR ({blocs.length})
+        </label>
       </div>
 
       {rerunMsg && (
@@ -211,9 +443,12 @@ export default function AdminPageEditPage() {
             <PageViewer
               page={editBbox ? { ...page, nomenclature_bbox: null, nomenclature_bboxes: [] } : page}
               refs={refs}
+              refsVues={refsVues}
               blocs={showBlocs ? blocs : []}
               showNomenclature={!editBbox}
               columnTemplate={catalogue?.column_template}
+              selectedNomencId={null}
+              selectedRepereId={null}
             />
             {editBbox && displaySize && naturalSize && pendingBboxes.map((b, i) => (
               <BboxEditor
@@ -227,7 +462,17 @@ export default function AdminPageEditPage() {
                 inactive={i !== activeBboxIdx}
               />
             ))}
+            {/* Mode placement repères : clic → OCR local → popup confirmation */}
+            {showReperes && !editBbox && (
+              <ReperesOverlay
+                pageId={id}
+                naturalSize={naturalSize}
+                displaySize={displaySize}
+                onAdd={addRepere}
+              />
+            )}
           </div>
+
         </div>
 
         <div className="column is-half">
@@ -302,30 +547,50 @@ export default function AdminPageEditPage() {
               </button>
             </>
           ) : isNomenclature ? (
-            <div className="or-box" style={{ padding: 0, overflow: 'hidden' }}>
-              <table className="or-table">
-                <thead>
-                  <tr>
-                    <th>Réf. vue</th>
-                    <th>Part Number</th>
-                    <th>Description</th>
-                    <th>Qté</th>
-                    <th>Remarques</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {refs.map(r => (
-                    <tr key={r.id}>
-                      <td className="or-muted">{r.ref_no}</td>
-                      <td><span className="or-mono">{r.part_number}</span></td>
-                      <td>{r.description}</td>
-                      <td>{r.qty}</td>
-                      <td className="or-muted" style={{ fontSize: '.8rem' }}>{r.remarks}</td>
+            <>
+              {selectedNomencIds.size > 0 && (
+                <div className="or-flex or-gap-2" style={{ marginBottom: '0.4rem', alignItems: 'center' }}>
+                  <span style={{ fontSize: '.8rem', color: 'var(--text-muted)' }}>{selectedNomencIds.size} sélectionnée(s)</span>
+                  <button className="or-btn or-btn-success or-btn-sm" onClick={() => bulkCorrige(true)}>✓ Marquer corrigées</button>
+                  <button className="or-btn or-btn-secondary or-btn-sm" onClick={() => bulkCorrige(false)}>Décocher</button>
+                </div>
+              )}
+              <div className="or-box" style={{ padding: 0, overflow: 'hidden' }}>
+                <table className="or-table">
+                  <thead>
+                    <tr>
+                      <th style={{ width: 28 }}>
+                        <input
+                          type="checkbox"
+                          checked={selectedNomencIds.size === refs.length && refs.length > 0}
+                          ref={el => { if (el) el.indeterminate = selectedNomencIds.size > 0 && selectedNomencIds.size < refs.length }}
+                          onChange={e => toggleNomencAll(e.target.checked)}
+                        />
+                      </th>
+                      <th style={{ width: 18 }}></th>
+                      <th>Réf.</th>
+                      <th>Part Number</th>
+                      <th>Description</th>
+                      <th>Qté</th>
+                      <th>Remarques</th>
+                      <th></th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {refs.map(r => (
+                      <NomenclatureRow
+                        key={r.id}
+                        data={r}
+                        selected={selectedNomencIds.has(r.id)}
+                        onSelect={checked => toggleNomencSelect(r.id, checked)}
+                        onUpdated={updated => setRefs(rs => rs.map(x => x.id === updated.id ? updated : x))}
+                        onDeleted={delId => setRefs(rs => rs.filter(x => x.id !== delId))}
+                      />
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
           ) : (
             <>
               <div className="or-box" style={{ padding: 0, overflow: 'hidden' }}>
@@ -354,6 +619,72 @@ export default function AdminPageEditPage() {
               </button>
             </>
           )}
+
+          {/* Références vues (zone schéma) */}
+          <div style={{ marginTop: '1rem' }}>
+            <div className="or-flex or-gap-2" style={{ alignItems: 'center', marginBottom: '0.4rem', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: '.8rem', color: 'var(--text-muted)', fontWeight: 'bold' }}>
+                <span style={{ display: 'inline-block', width: 10, height: 10, background: '#8b5cf6', borderRadius: 2, marginRight: 6, verticalAlign: 'middle' }} />
+                Repères schéma {refsVues.length > 0 ? `(${refsVues.length})` : ''}
+              </span>
+              <button
+                className={`or-btn or-btn-sm or-btn-secondary ${rerunningVues ? 'is-loading' : ''}`}
+                onClick={rerunVues}
+                disabled={rerunningVues}
+              >
+                <RotateCcw size={13} />
+                <span>Détecter</span>
+              </button>
+              <button
+                className={`or-btn or-btn-sm ${showReperes ? 'or-btn-primary' : 'or-btn-secondary'}`}
+                onClick={() => setShowReperes(s => !s)}
+                title="Afficher/masquer les repères sur l'image. Clic sur l'image pour ajouter, clic droit sur un repère pour supprimer."
+              >
+                {showReperes ? 'Masquer overlay' : 'Overlay schéma'}
+              </button>
+              {vuesMsg && <span style={{ fontSize: '.8rem', color: 'var(--text-muted)' }}>{vuesMsg}</span>}
+            </div>
+            {refsVues.length > 0 && (
+              <div className="or-box" style={{ padding: 0, overflow: 'hidden' }}>
+                <table className="or-table">
+                  <thead>
+                    <tr>
+                      <th>Repère</th>
+                      <th>Jointure</th>
+                      <th>Pièce trouvée</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {refsVues.map(r => (
+                      <tr key={r.id} style={{ opacity: r.nomenclature_id ? 1 : 0.55 }}>
+                        <td>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: '#8b5cf6', color: '#fff', borderRadius: '50%', width: 22, height: 22, fontSize: 11, fontWeight: 'bold' }}>
+                            {r.part_number}
+                          </span>
+                        </td>
+                        <td style={{ fontSize: '.75rem' }}>
+                          {r.join_type === 'ref_no' && <span style={{ color: '#10b981' }}>ref_no</span>}
+                          {r.join_type === 'part_number' && <span style={{ color: '#3b82f6' }}>part_number</span>}
+                          {!r.nomenclature_id && <span className="or-muted">—</span>}
+                        </td>
+                        <td style={{ fontSize: '.8rem' }}>
+                          {r.nomenclature_id
+                            ? <><span className="or-mono" style={{ fontSize: '.75rem' }}>{r.nomenc_part_number}</span> {r.description && <span className="or-muted"> · {r.description}</span>}</>
+                            : <span className="or-muted">non trouvé</span>}
+                        </td>
+                        <td>
+                          <button className="or-btn or-btn-ghost or-btn-sm or-btn-icon-only" onClick={() => deleteRepere(r)} title="Supprimer">
+                            <X size={12} />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>

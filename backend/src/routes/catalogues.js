@@ -101,8 +101,14 @@ router.delete('/:id', async (req, res) => {
 router.get('/:id/pages', async (req, res) => {
   const { rows } = await pool.query(
     `SELECT p.*,
-       (SELECT COUNT(*)::int FROM reference r WHERE r.id_page = p.id AND r.corrige = true) AS nb_corriges,
-       (SELECT COUNT(*)::int FROM reference r WHERE r.id_page = p.id) AS nb_refs
+       CASE WHEN p.has_nomenclature
+         THEN (SELECT COUNT(*)::int FROM nomenclature n WHERE n.source_page_id = p.id AND n.corrige = true)
+         ELSE (SELECT COUNT(*)::int FROM reference r WHERE r.id_page = p.id AND r.corrige = true)
+       END AS nb_corriges,
+       CASE WHEN p.has_nomenclature
+         THEN (SELECT COUNT(*)::int FROM nomenclature n WHERE n.source_page_id = p.id)
+         ELSE (SELECT COUNT(*)::int FROM reference r WHERE r.id_page = p.id)
+       END AS nb_refs
      FROM page p
      WHERE p.id_catalogue=$1
      ORDER BY p.numero`,

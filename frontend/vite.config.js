@@ -6,6 +6,7 @@ export default defineConfig({
   cacheDir: '/tmp/vite-cache',
   server: {
     port: 3000,
+    allowedHosts: ['openref-dev.frezille.fr'],
     headers: {
       'Cache-Control': 'no-store',
     },

@@ -53,16 +53,25 @@ function CroppedImage({ src, bbox, onLoad, style }) {
  * Affiche l'image croppée sur la bbox, avec des traits verticaux déplaçables.
  * Entre chaque paire de traits (et avant le premier / après le dernier) : label de rôle.
  */
-export default function ColumnTemplateBuilder({ page, imageW, imageH, onChange }) {
+export default function ColumnTemplateBuilder({ page, imageW, imageH, onChange, initialTemplate }) {
   const containerRef = useRef(null)
   const [displaySize, setDisplaySize] = useState(null)
   const [naturalSize, setNaturalSize] = useState(null)
-  // dividers : liste de { x_rel, role } triés par x_rel croissant
-  // x_rel est relatif à la bbox (0 = x1, 1 = x2)
-  const [dividers, setDividers] = useState([])
-  // colonnes = zones entre dividers, chacune a un rôle
-  // zones: [{ role }] — length = dividers.length + 1
-  const [zones, setZones] = useState([{ role: 'part_number' }])
+
+  // Reconstruit dividers/zones depuis un column_template sauvegardé
+  const initFromTemplate = (tmpl) => {
+    if (!tmpl?.columns?.length) return { dividers: [], zones: [{ role: 'part_number' }] }
+    // columns = [{ role, x_rel_right }] triés par x_rel_right croissant
+    // Les dividers sont les x_rel_right de toutes les colonnes sauf la dernière
+    const sorted = [...tmpl.columns].sort((a, b) => a.x_rel_right - b.x_rel_right)
+    const divs = sorted.slice(0, -1).map(c => ({ x_rel: c.x_rel_right }))
+    const zns = sorted.map(c => ({ role: c.role }))
+    return { dividers: divs, zones: zns }
+  }
+
+  const init = initFromTemplate(initialTemplate)
+  const [dividers, setDividers] = useState(init.dividers)
+  const [zones, setZones] = useState(init.zones)
 
   const bbox = page?.nomenclature_bbox
   const dragging = useRef(null) // { idx, startX, startXRel }

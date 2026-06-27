@@ -362,8 +362,10 @@ body {
   padding-right: 2rem;
 }
 .or-input { background-color: var(--surface) !important; color: var(--text) !important; }
-.or-input-inline { border: none; background: transparent; padding: 0; box-shadow: none; font-size: inherit; color: inherit; outline: none; width: 100%; }
-.or-input-inline:focus { outline: none; }
+.or-input-inline { border: none; background: transparent; padding: 0 2px; box-shadow: none; font-size: inherit; color: inherit; outline: none; width: 100%; border-bottom: 1.5px solid transparent; transition: border-color .15s; }
+.or-input-inline:hover { border-bottom-color: var(--border); }
+.or-input-inline:focus { outline: none; border-bottom-color: var(--brand); background: var(--surface-alt); border-radius: 3px 3px 0 0; }
+.or-input-inline::placeholder { color: var(--text-subtle, var(--text-muted)); font-style: italic; font-weight: 400; }
 
 /* Addons */
 .or-field-addons { display: flex; gap: 0; }

@@ -58,12 +58,121 @@ router.post('/pages/:id/rerun-nomenclature', async (req, res) => {
   res.json(result)
 })
 
+router.post('/pages/:id/extract-meta', async (req, res) => {
+  const { id } = req.params
+  const { rows: pages } = await pool.query('SELECT id_catalogue FROM page WHERE id=$1', [id])
+  if (!pages[0]) return res.status(404).json({ error: 'Page not found' })
+  const { rows: cats } = await pool.query('SELECT column_template FROM catalogue WHERE id=$1', [pages[0].id_catalogue])
+  const column_template = cats[0]?.column_template ?? null
+
+  const OCR_URL = process.env.OCR_SERVICE_URL || 'http://ocr-service:8001'
+  const form = new URLSearchParams({ page_id: id })
+  if (column_template) form.set('column_template', JSON.stringify(column_template))
+  const ocrRes = await fetch(`${OCR_URL}/ocr/extract-meta/page`, { method: 'POST', body: form })
+  if (!ocrRes.ok) return res.status(502).json({ error: 'OCR service error' })
+  const result = await ocrRes.json()
+  res.json(result)
+})
+
 router.get('/pages/:id/nomenclature', async (req, res) => {
   const { rows } = await pool.query(
     `SELECT * FROM nomenclature WHERE source_page_id=$1 ORDER BY id`,
     [req.params.id]
   )
   res.json(rows)
+})
+
+router.post('/pages/:id/rerun-vues', async (req, res) => {
+  const { id } = req.params
+  const { rows: pages } = await pool.query('SELECT id_catalogue FROM page WHERE id=$1', [id])
+  if (!pages[0]) return res.status(404).json({ error: 'Page not found' })
+  const { rows: cats } = await pool.query('SELECT column_template FROM catalogue WHERE id=$1', [pages[0].id_catalogue])
+  const column_template = cats[0]?.column_template ?? null
+
+  const OCR_URL = process.env.OCR_SERVICE_URL || 'http://ocr-service:8001'
+  const form = new URLSearchParams({ page_id: id })
+  if (column_template) form.set('column_template', JSON.stringify(column_template))
+  const ocrRes = await fetch(`${OCR_URL}/ocr/vues/page`, { method: 'POST', body: form })
+  if (!ocrRes.ok) return res.status(502).json({ error: 'OCR service error' })
+  const result = await ocrRes.json()
+  res.json(result)
+})
+
+router.get('/pages/:id/refs-vues', async (req, res) => {
+  const { rows } = await pool.query(
+    `SELECT rv.id, rv.part_number, rv.qty, rv.contexte_groupe, rv.raw_block,
+            rv.pos_x, rv.pos_y, rv.nomenclature_id, rv.join_type,
+            n.description, n.part_number AS nomenc_part_number, n.ref_no AS nomenc_ref_no
+     FROM references_vues rv
+     LEFT JOIN nomenclature n ON n.id = rv.nomenclature_id
+     WHERE rv.page_id = $1
+     ORDER BY (rv.part_number ~ '^[0-9]+$') DESC, NULLIF(regexp_replace(rv.part_number, '[^0-9]', '', 'g'), '')::int NULLS LAST`,
+    [req.params.id]
+  )
+  res.json(rows)
+})
+
+router.patch('/nomenclature/:id', async (req, res) => {
+  const fields = ['part_number', 'description', 'ref_no', 'qty', 'remarks', 'corrige']
+  const updates = []
+  const values = []
+  fields.forEach(f => {
+    if (req.body[f] !== undefined) {
+      updates.push(`${f}=$${values.length + 1}`)
+      const v = req.body[f]
+      values.push(typeof v === 'boolean' ? v : (v || null))
+    }
+  })
+  if (!updates.length) return res.status(400).json({ error: 'Nothing to update' })
+  values.push(req.params.id)
+  const { rows } = await pool.query(
+    `UPDATE nomenclature SET ${updates.join(',')} WHERE id=$${values.length} RETURNING *`,
+    values
+  )
+  if (!rows[0]) return res.status(404).json({ error: 'Not found' })
+  res.json(rows[0])
+})
+
+router.delete('/nomenclature/:id', async (req, res) => {
+  await pool.query('DELETE FROM nomenclature WHERE id=$1', [req.params.id])
+  res.json({ ok: true })
+})
+
+router.patch('/nomenclature-bulk/corrige', async (req, res) => {
+  const { ids, corrige } = req.body
+  if (!Array.isArray(ids) || !ids.length) return res.status(400).json({ error: 'ids required' })
+  const { rows } = await pool.query(
+    `UPDATE nomenclature SET corrige=$1 WHERE id = ANY($2::int[]) RETURNING *`,
+    [!!corrige, ids]
+  )
+  res.json(rows)
+})
+
+router.post('/pages/:id/refs-vues', async (req, res) => {
+  const { part_number, pos_x, pos_y } = req.body
+  if (!part_number) return res.status(400).json({ error: 'part_number required' })
+  const pn = String(part_number)
+  const { rows } = await pool.query(
+    `INSERT INTO references_vues (page_id, part_number, pos_x, pos_y, raw_block)
+     VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+    [req.params.id, pn, pos_x ?? null, pos_y ?? null, pn]
+  )
+  res.json(rows[0])
+})
+
+router.post('/pages/:id/ocr-point', async (req, res) => {
+  const { cx, cy, radius = 40 } = req.body
+  if (cx == null || cy == null) return res.status(400).json({ error: 'cx, cy required' })
+  const OCR_URL = process.env.OCR_SERVICE_URL || 'http://ocr-service:8001'
+  const form = new URLSearchParams({ page_id: req.params.id, cx: String(Math.round(cx)), cy: String(Math.round(cy)), radius: String(radius) })
+  const ocrRes = await fetch(`${OCR_URL}/ocr/vues/ocr-point`, { method: 'POST', body: form })
+  if (!ocrRes.ok) return res.status(502).json({ error: 'OCR error' })
+  res.json(await ocrRes.json())
+})
+
+router.delete('/refs-vues/:id', async (req, res) => {
+  await pool.query('DELETE FROM references_vues WHERE id=$1', [req.params.id])
+  res.json({ ok: true })
 })
 
 export default router

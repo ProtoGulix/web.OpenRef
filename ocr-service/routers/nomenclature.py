@@ -381,6 +381,30 @@ def _parse_line_fallback(line: list[dict]) -> dict | None:
 
 # ── Pipeline complet d'une page ───────────────────────────────────────────────
 
+def _template_to_cols(column_template: dict, bbox: dict) -> dict[str, int]:
+    """
+    Convertit un column_template (format relatif) en {field: x_right_abs}
+    adapté à la bbox réelle de la page courante.
+
+    Format template attendu :
+      { "columns": [{"role": "ref_no", "x_rel_right": 0.12}, ...], "bbox_ref": {...} }
+
+    Les x_rel_right sont relatifs à la bbox de référence, mais on les applique
+    à la bbox courante — ce qui rend le gabarit invariant aux décalages de scan.
+    """
+    columns = column_template.get("columns")
+    if not columns:
+        return {}
+    bw = bbox["x2"] - bbox["x1"]
+    cols: dict[str, int] = {}
+    for col in columns:
+        role = col.get("role")
+        x_rel = col.get("x_rel_right")
+        if role and x_rel is not None and role != "ignore":
+            cols[role] = int(bbox["x1"] + x_rel * bw)
+    return cols
+
+
 def _ocr_nomenclature_page(img_path: str, bbox: dict, column_template: dict | None = None) -> list[dict]:
     pil = Image.open(img_path)
     x1, y1, x2, y2 = bbox["x1"], bbox["y1"], bbox["x2"], bbox["y2"]
@@ -407,9 +431,9 @@ def _ocr_nomenclature_page(img_path: str, bbox: dict, column_template: dict | No
             "conf": int(tsv["conf"][i]),
         })
 
-    # Si un gabarit de colonnes est fourni, l'utiliser directement
+    # Gabarit fourni : recalculer les X absolus depuis les ratios relatifs + bbox courante
     if column_template:
-        cols = column_template  # {field_name: x_right_abs}
+        cols = _template_to_cols(column_template, bbox)
     else:
         cols = _detect_columns(blocs)
 
