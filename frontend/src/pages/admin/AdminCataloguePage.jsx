@@ -258,6 +258,9 @@ export default function AdminCataloguePage() {
       <div className="or-page-header">
         <h1 className="or-page-title">Correction OCR — {catalogue?.name}</h1>
         <div className="or-flex or-gap-2">
+          <Link to={`/admin/catalogue/${id}/groupes`} className="or-btn or-btn-sm or-btn-secondary">
+            Groupes
+          </Link>
           <button
             className={`or-btn or-btn-sm ${showAddPages ? 'or-btn-warning' : 'or-btn-secondary'}`}
             onClick={() => { setShowAddPages(s => !s); setAddError(null) }}

@@ -100,12 +100,25 @@ router.post('/pages/:id/rerun-vues', async (req, res) => {
 
 router.get('/pages/:id/refs-vues', async (req, res) => {
   const { rows } = await pool.query(
-    `SELECT rv.id, rv.part_number, rv.qty, rv.contexte_groupe, rv.raw_block,
-            rv.pos_x, rv.pos_y, rv.nomenclature_id, rv.join_type,
-            n.description, n.part_number AS nomenc_part_number, n.ref_no AS nomenc_ref_no
+    `SELECT rv.id, rv.part_number, rv.qty, rv.contexte_groupe, rv.raw_block, rv.pos_x, rv.pos_y,
+            COALESCE(
+              json_agg(
+                json_build_object(
+                  'id', rvn.id,
+                  'nomenclature_id', n.id,
+                  'join_type', rvn.join_type,
+                  'part_number', n.part_number,
+                  'ref_no', n.ref_no,
+                  'description', n.description
+                ) ORDER BY rvn.id
+              ) FILTER (WHERE rvn.id IS NOT NULL),
+              '[]'
+            ) AS liaisons
      FROM references_vues rv
-     LEFT JOIN nomenclature n ON n.id = rv.nomenclature_id
+     LEFT JOIN ref_vue_nomenclature rvn ON rvn.ref_vue_id = rv.id
+     LEFT JOIN nomenclature n ON n.id = rvn.nomenclature_id
      WHERE rv.page_id = $1
+     GROUP BY rv.id
      ORDER BY (rv.part_number ~ '^[0-9]+$') DESC, NULLIF(regexp_replace(rv.part_number, '[^0-9]', '', 'g'), '')::int NULLS LAST`,
     [req.params.id]
   )
@@ -168,6 +181,29 @@ router.post('/pages/:id/ocr-point', async (req, res) => {
   const ocrRes = await fetch(`${OCR_URL}/ocr/vues/ocr-point`, { method: 'POST', body: form })
   if (!ocrRes.ok) return res.status(502).json({ error: 'OCR error' })
   res.json(await ocrRes.json())
+})
+
+// Ajouter une liaison repère → nomenclature
+router.post('/refs-vues/:id/nomenclatures', async (req, res) => {
+  const { nomenclature_id } = req.body
+  if (!nomenclature_id) return res.status(400).json({ error: 'nomenclature_id required' })
+  const { rows } = await pool.query(
+    `INSERT INTO ref_vue_nomenclature (ref_vue_id, nomenclature_id, join_type)
+     VALUES ($1, $2, 'manual')
+     ON CONFLICT (ref_vue_id, nomenclature_id) DO NOTHING
+     RETURNING *`,
+    [req.params.id, nomenclature_id]
+  )
+  res.json(rows[0] ?? { ref_vue_id: req.params.id, nomenclature_id, join_type: 'manual' })
+})
+
+// Retirer une liaison repère → nomenclature
+router.delete('/refs-vues/:refVueId/nomenclatures/:nomenclatureId', async (req, res) => {
+  await pool.query(
+    `DELETE FROM ref_vue_nomenclature WHERE ref_vue_id=$1 AND nomenclature_id=$2`,
+    [req.params.refVueId, req.params.nomenclatureId]
+  )
+  res.json({ ok: true })
 })
 
 router.delete('/refs-vues/:id', async (req, res) => {

@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { ChevronRight, Pencil } from 'lucide-react'
+import { ChevronRight, Pencil, Search } from 'lucide-react'
 import PageViewer from '../components/PageViewer'
 import PricePanel from '../components/PricePanel'
 import { api } from '../api/client'
@@ -10,10 +10,13 @@ export default function PageViewPage() {
   const [page, setPage] = useState(null)
   const [refs, setRefs] = useState([])
   const [refsVues, setRefsVues] = useState([])
-  const [selected, setSelected] = useState(null)       // ligne nomenclature sélectionnée
-  const [selectedRepere, setSelectedRepere] = useState(null) // repère sélectionné
+  const [selectedIds, setSelectedIds] = useState(new Set())   // lignes en surbrillance
+  const [selectedRepere, setSelectedRepere] = useState(null)  // repère en surbrillance
+  const [hoveredNomencId, setHoveredNomencId] = useState(null)
+  const [hoveredRepere, setHoveredRepere] = useState(null)
+  const [priceRef, setPriceRef] = useState(null)              // ligne dont on cherche les prix
   const [loading, setLoading] = useState(true)
-  const rowRefs = useRef({})  // refs vers les <tr> pour scroll
+  const rowRefs = useRef({})
 
   useEffect(() => {
     api.getPage(id).then(pg => {
@@ -25,24 +28,22 @@ export default function PageViewPage() {
       .finally(() => setLoading(false))
   }, [id])
 
-  // Clic sur un repère → sélectionne + scroll vers la ligne nomenclature
+  // Clic repère → surbrillance de toutes les lignes liées, scroll vers la première
   const handleRepereClick = (repere) => {
     setSelectedRepere(repere)
-    if (repere.nomenclature_id) {
-      const match = refs.find(r => r.id === repere.nomenclature_id)
-      if (match) {
-        setSelected(match)
-        rowRefs.current[match.id]?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-      }
-    }
+    const ids = new Set(repere.liaisons?.map(l => l.nomenclature_id) ?? [])
+    setSelectedIds(ids)
+    setPriceRef(null)
+    const firstId = repere.liaisons?.[0]?.nomenclature_id
+    if (firstId) rowRefs.current[firstId]?.scrollIntoView({ behavior: 'smooth', block: 'center' })
   }
 
-  // Clic sur une ligne → sélectionne + trouve le repère correspondant
+  // Clic ligne → surbrillance de cette ligne + son repère
   const handleRowClick = (ref) => {
-    setSelected(ref)
-    // Cherche le repère lié à cette ligne nomenclature
-    const repere = refsVues.find(r => r.nomenclature_id === ref.id)
+    setSelectedIds(new Set([ref.id]))
+    const repere = refsVues.find(r => r.liaisons?.some(l => l.nomenclature_id === ref.id))
     setSelectedRepere(repere ?? null)
+    if (priceRef?.id === ref.id) setPriceRef(null) // toggle prix si déjà ouvert sur cette ligne
   }
 
   if (loading) return <progress className="or-progress" />
@@ -74,8 +75,12 @@ export default function PageViewPage() {
             refsVues={refsVues}
             onRefClick={handleRowClick}
             onRepereClick={handleRepereClick}
-            selectedNomencId={selected?.id ?? null}
+            onRepereHover={r => setHoveredRepere(r ?? null)}
+            selectedNomencId={selectedIds.size === 1 ? [...selectedIds][0] : null}
             selectedRepereId={selectedRepere?.id ?? null}
+            hoveredNomencIds={hoveredRepere ? new Set(hoveredRepere.liaisons?.map(l => l.nomenclature_id) ?? []) : hoveredNomencId ? new Set([hoveredNomencId]) : null}
+            hoveredRepereId={hoveredNomencId ? refsVues.find(rv => rv.liaisons?.some(l => l.nomenclature_id === hoveredNomencId))?.id ?? null : hoveredRepere?.id ?? null}
+            schemaOnly
           />
         </div>
 
@@ -84,48 +89,61 @@ export default function PageViewPage() {
             {page.titre || `Page ${page.numero}`}
           </h2>
 
-          {selected && (
-            <div className="or-box" style={{ marginBottom: '1rem' }}>
-              <p style={{ fontWeight: 600, marginBottom: '.25rem' }}>
-                {selected.ref_no && <span className="or-muted" style={{ marginRight: '.4rem' }}>#{selected.ref_no} —</span>}
-                <span className="or-mono">{selected.part_number}</span>
-              </p>
-              <p style={{ fontSize: '.875rem', marginBottom: '.75rem' }}>{selected.description}</p>
-              <PricePanel partNumber={selected.part_number} marque="landrover" />
-            </div>
-          )}
-
           <div className="or-box" style={{ padding: 0, overflow: 'hidden' }}>
             <table className="or-table">
               <thead>
-                <tr><th>#</th><th>Référence</th><th>Description</th><th>Qté</th><th>Remarques</th></tr>
+                <tr><th>#</th><th>Référence</th><th>Description</th><th>Qté</th><th>Remarques</th><th></th></tr>
               </thead>
               <tbody>
                 {refs.map(r => {
-                  const isSelected = selected?.id === r.id
-                  const hasRepere = refsVues.some(rv => rv.nomenclature_id === r.id)
+                  const isHighlighted = selectedIds.has(r.id)
+                  const isHovered = hoveredNomencId === r.id || (hoveredRepere?.liaisons?.some(l => l.nomenclature_id === r.id) ?? false)
+                  const isPriceOpen = priceRef?.id === r.id
+                  const linkedRepere = refsVues.find(rv => rv.liaisons?.some(l => l.nomenclature_id === r.id))
+                  const repereNum = linkedRepere?.part_number ?? null
                   return (
-                    <tr
-                      key={r.id}
-                      ref={el => { rowRefs.current[r.id] = el }}
-                      onClick={() => handleRowClick(r)}
-                      style={{
-                        cursor: 'pointer',
-                        background: isSelected ? 'var(--brand-light)' : undefined,
-                        outline: isSelected ? '2px solid #8b5cf6' : undefined,
-                      }}
-                    >
-                      <td style={{ fontSize: '.8rem' }}>
-                        {hasRepere
-                          ? <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: isSelected ? '#6d28d9' : '#8b5cf6', color: '#fff', borderRadius: '50%', width: 20, height: 20, fontSize: 10, fontWeight: 'bold' }}>{r.ref_no ?? r.plate_ref}</span>
-                          : <span className="or-muted">{r.ref_no ?? r.plate_ref}</span>
-                        }
-                      </td>
-                      <td><span className="or-mono">{r.part_number}</span></td>
-                      <td style={{ fontSize: '.85rem' }}>{r.description}</td>
-                      <td className="or-muted">{r.qty}</td>
-                      <td className="or-muted" style={{ fontSize: '.8rem' }}>{r.remarks}</td>
-                    </tr>
+                    <React.Fragment key={r.id}>
+                      <tr
+                        ref={el => { rowRefs.current[r.id] = el }}
+                        onClick={() => handleRowClick(r)}
+                        onMouseEnter={() => setHoveredNomencId(r.id)}
+                        onMouseLeave={() => setHoveredNomencId(null)}
+                        style={{
+                          cursor: 'pointer',
+                          background: isHighlighted ? 'var(--brand-light)' : isHovered ? 'rgba(139,92,246,0.07)' : undefined,
+                          outline: isHighlighted ? '2px solid #8b5cf6' : isHovered ? '1px solid rgba(139,92,246,0.3)' : undefined,
+                          transition: 'background 0.1s',
+                        }}
+                      >
+                        <td style={{ fontSize: '.8rem' }}>
+                          {repereNum != null
+                            ? <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: isHighlighted ? '#6d28d9' : isHovered ? '#7c3aed' : '#8b5cf6', color: '#fff', borderRadius: '50%', width: 20, height: 20, fontSize: 10, fontWeight: 'bold', transition: 'background 0.1s' }}>{repereNum}</span>
+                            : <span className="or-muted">{r.ref_no ?? r.plate_ref}</span>
+                          }
+                        </td>
+                        <td><span className="or-mono">{r.part_number}</span></td>
+                        <td style={{ fontSize: '.85rem' }}>{r.description}</td>
+                        <td className="or-muted">{r.qty}</td>
+                        <td className="or-muted" style={{ fontSize: '.8rem' }}>{r.remarks}</td>
+                        <td onClick={e => e.stopPropagation()}>
+                          <button
+                            title="Chercher les prix"
+                            onClick={() => setPriceRef(isPriceOpen ? null : r)}
+                            className="or-btn or-btn-ghost or-btn-sm or-btn-icon-only"
+                            style={{ opacity: isPriceOpen ? 1 : 0.45, color: isPriceOpen ? '#8b5cf6' : undefined }}
+                          >
+                            <Search size={13} />
+                          </button>
+                        </td>
+                      </tr>
+                      {isPriceOpen && (
+                        <tr style={{ background: 'var(--brand-light)' }}>
+                          <td colSpan={6} style={{ padding: '0.75rem 1rem' }}>
+                            <PricePanel partNumber={r.part_number} marque="landrover" />
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
                   )
                 })}
               </tbody>

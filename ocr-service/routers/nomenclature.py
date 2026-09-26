@@ -551,8 +551,14 @@ async def ocr_nomenclature(catalogue_id: int = Form(...), column_template: str =
 
 
 @router.post("/nomenclature/page")
-async def ocr_nomenclature_page(page_id: int = Form(...)):
-    """Relance l'OCR nomenclature sur une seule page (après correction manuelle des bboxes)."""
+async def ocr_nomenclature_page(
+    page_id: int = Form(...),
+    nomenclature_bboxes_override: str = Form(None),
+    column_template: str = Form(None),
+):
+    """Relance l'OCR nomenclature sur une seule page (après correction manuelle des bboxes).
+    nomenclature_bboxes_override et column_template sont optionnels : s'ils sont fournis,
+    ils prennent la priorité sur les valeurs de la page et du catalogue."""
     db = await _get_db()
     loop = asyncio.get_event_loop()
     try:
@@ -563,25 +569,33 @@ async def ocr_nomenclature_page(page_id: int = Form(...)):
         if not row:
             return {"error": "page not found"}
 
-        bboxes = row["nomenclature_bboxes"]
-        if isinstance(bboxes, str):
-            bboxes = json.loads(bboxes)
-        if not bboxes:
-            bbox = row["nomenclature_bbox"]
-            if isinstance(bbox, str):
-                bbox = json.loads(bbox)
-            bboxes = [{**bbox, "name": "Nomenclature"}] if bbox else []
+        # Priorité : override fourni > page.nomenclature_bboxes > page.nomenclature_bbox
+        if nomenclature_bboxes_override:
+            bboxes = json.loads(nomenclature_bboxes_override)
+        else:
+            bboxes = row["nomenclature_bboxes"]
+            if isinstance(bboxes, str):
+                bboxes = json.loads(bboxes)
+            if not bboxes:
+                bbox = row["nomenclature_bbox"]
+                if isinstance(bbox, str):
+                    bbox = json.loads(bbox)
+                bboxes = [{**bbox, "name": "Nomenclature"}] if bbox else []
         if not bboxes:
             return {"error": "no nomenclature_bboxes"}
 
         catalogue_id = row["id_catalogue"]
         img_path = str(STORAGE_ROOT / str(catalogue_id) / Path(row["image"]).name)
 
-        cat_row = await db.fetchrow("SELECT column_template FROM catalogue WHERE id=$1", catalogue_id)
-        column_template = None
-        if cat_row and cat_row["column_template"]:
-            tmpl = cat_row["column_template"]
-            column_template = json.loads(tmpl) if isinstance(tmpl, str) else dict(tmpl)
+        # Priorité : column_template fourni > catalogue.column_template
+        if column_template:
+            column_template = json.loads(column_template)
+        else:
+            cat_row = await db.fetchrow("SELECT column_template FROM catalogue WHERE id=$1", catalogue_id)
+            column_template = None
+            if cat_row and cat_row["column_template"]:
+                tmpl = cat_row["column_template"]
+                column_template = json.loads(tmpl) if isinstance(tmpl, str) else dict(tmpl)
 
         await db.execute("DELETE FROM nomenclature WHERE source_page_id=$1", page_id)
 

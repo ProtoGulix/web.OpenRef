@@ -4,6 +4,7 @@ import SearchPage from './pages/SearchPage'
 import CataloguesPage from './pages/CataloguesPage'
 import CataloguePage from './pages/CataloguePage'
 import PageViewPage from './pages/PageViewPage'
+import GroupePage from './pages/GroupePage'
 import RefPage from './pages/RefPage'
 import AdminImportPage from './pages/admin/AdminImportPage'
 import AdminCataloguePage from './pages/admin/AdminCataloguePage'
@@ -11,6 +12,8 @@ import AdminPageEditPage from './pages/admin/AdminPageEditPage'
 import AdminSourcesPage from './pages/admin/AdminSourcesPage'
 import AdminImportsPage from './pages/admin/AdminImportsPage'
 import AdminJobsPage from './pages/admin/AdminJobsPage'
+import AdminGroupesPage from './pages/admin/AdminGroupesPage'
+import AdminGroupeEditPage from './pages/admin/AdminGroupeEditPage'
 
 const NAV = [
   { to: '/',               icon: Search,   label: 'Recherche' },
@@ -49,6 +52,7 @@ export default function App() {
           <Route path="/catalogues"             element={<CataloguesPage />} />
           <Route path="/catalogue/:id"          element={<CataloguePage />} />
           <Route path="/page/:id"               element={<PageViewPage />} />
+          <Route path="/groupe/:id"             element={<GroupePage />} />
           <Route path="/ref/:partNumber"        element={<RefPage />} />
           <Route path="/admin/imports"          element={<AdminImportsPage />} />
           <Route path="/admin/jobs"             element={<AdminJobsPage />} />
@@ -56,6 +60,8 @@ export default function App() {
           <Route path="/admin/catalogue/:id"    element={<AdminCataloguePage />} />
           <Route path="/admin/page/:id/edit"    element={<AdminPageEditPage />} />
           <Route path="/admin/sources"          element={<AdminSourcesPage />} />
+          <Route path="/admin/catalogue/:id/groupes" element={<AdminGroupesPage />} />
+          <Route path="/admin/groupe/:id/edit" element={<AdminGroupeEditPage />} />
         </Routes>
       </main>
     </>

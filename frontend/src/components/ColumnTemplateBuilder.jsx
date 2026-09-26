@@ -25,15 +25,16 @@ function CroppedImage({ src, bbox, onLoad, style }) {
       if (!canvas) return
       const bboxW = bbox.x2 - bbox.x1
       const bboxH = bbox.y2 - bbox.y1
-      // Afficher à 100% de la largeur du container
-      const containerW = canvas.parentElement?.offsetWidth || 600
-      const scale = containerW / bboxW
-      canvas.width = containerW
-      canvas.height = bboxH * scale
+      // Canvas en résolution native pour la netteté
+      canvas.width = bboxW
+      canvas.height = bboxH
       const ctx = canvas.getContext('2d')
-      ctx.drawImage(img, bbox.x1, bbox.y1, bboxW, bboxH, 0, 0, containerW, bboxH * scale)
+      ctx.drawImage(img, bbox.x1, bbox.y1, bboxW, bboxH, 0, 0, bboxW, bboxH)
       setLoaded(true)
-      onLoad?.({ w: img.naturalWidth, h: img.naturalHeight }, { w: containerW, h: bboxH * scale })
+      // displaySize = taille affichée en CSS (100% container)
+      const containerW = canvas.parentElement?.offsetWidth || 600
+      const dispH = bboxH * (containerW / bboxW)
+      onLoad?.({ w: img.naturalWidth, h: img.naturalHeight }, { w: containerW, h: dispH })
     }
     img.src = src
   }, [src, bbox])
@@ -76,23 +77,18 @@ export default function ColumnTemplateBuilder({ page, imageW, imageH, onChange, 
   const bbox = page?.nomenclature_bbox
   const dragging = useRef(null) // { idx, startX, startXRel }
 
-  // Mesurer l'image affichée
+  // Mesurer la taille CSS affichée du canvas (pas sa résolution interne)
   useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
     const measure = () => {
-      const img = containerRef.current?.querySelector('.ctb-img')
-      if (img) {
-        setDisplaySize({ w: img.offsetWidth, h: img.offsetHeight })
-        if (img.naturalWidth) setNaturalSize({ w: img.naturalWidth, h: img.naturalHeight })
-      }
+      const canvas = container.querySelector('.ctb-img')
+      if (canvas?.offsetWidth) setDisplaySize({ w: canvas.offsetWidth, h: canvas.offsetHeight })
     }
     measure()
-    const img = containerRef.current?.querySelector('.ctb-img')
-    if (img) img.addEventListener('load', measure)
-    window.addEventListener('resize', measure)
-    return () => {
-      window.removeEventListener('resize', measure)
-      if (img) img.removeEventListener('load', measure)
-    }
+    const ro = new ResizeObserver(measure)
+    ro.observe(container)
+    return () => ro.disconnect()
   }, [page])
 
   // Notifier le parent

@@ -11,6 +11,7 @@ process.on('uncaughtException', (err) => {
 })
 
 import cataloguesRouter from './routes/catalogues.js'
+import groupesRouter from './routes/groupes.js'
 import pagesRouter from './routes/pages.js'
 import referencesRouter from './routes/references.js'
 import sourcesRouter from './routes/sources.js'
@@ -28,6 +29,7 @@ app.use(express.json())
 app.use('/storage', express.static('../storage'))
 
 app.use('/api/catalogues', cataloguesRouter)
+app.use('/api', groupesRouter)
 app.use('/api', pagesRouter)
 app.use('/api', referencesRouter)
 app.use('/api/sources', sourcesRouter)

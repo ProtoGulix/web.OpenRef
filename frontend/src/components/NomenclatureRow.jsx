@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { X } from 'lucide-react'
 import { api } from '../api/client'
 
-export default function NomenclatureRow({ data, onUpdated, onDeleted, selected, onSelect }) {
+export default function NomenclatureRow({ data, onUpdated, onDeleted, selected, onSelect, reperes }) {
   const [form, setForm] = useState({ ...data })
   const [saving, setSaving] = useState(false)
 
@@ -44,8 +44,10 @@ export default function NomenclatureRow({ data, onUpdated, onDeleted, selected, 
 
   const isCorrige = form.corrige
 
+  const isLinked = reperes?.length > 0
+
   return (
-    <tr style={{ opacity: saving ? 0.6 : 1, background: isCorrige ? 'rgba(21,128,61,0.04)' : undefined }}>
+    <tr style={{ opacity: saving ? 0.6 : 1, background: isLinked ? 'rgba(109,40,217,0.06)' : isCorrige ? 'rgba(21,128,61,0.04)' : undefined }}>
       <td style={{ width: 28, paddingRight: 0 }}>
         <input
           type="checkbox"
@@ -66,7 +68,16 @@ export default function NomenclatureRow({ data, onUpdated, onDeleted, selected, 
           }}
         />
       </td>
-      <td className="or-muted">{field('ref_no', '—', { width: '4ch' })}</td>
+      <td style={{ whiteSpace: 'nowrap' }}>
+        {isLinked
+          ? reperes.map(pn => (
+              <span key={pn} title={`Repère ${pn}${form.ref_no ? ` · ref_no: ${form.ref_no}` : ''}`} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: '#8b5cf6', color: '#fff', borderRadius: '50%', width: 22, height: 22, fontSize: 11, fontWeight: 'bold', marginRight: 2, cursor: 'default' }}>
+                {pn}
+              </span>
+            ))
+          : <span className="or-muted">{field('ref_no', '—', { width: '4ch' })}</span>
+        }
+      </td>
       <td><span className="or-mono">{field('part_number', 'Part number', { width: '10ch', fontFamily: 'monospace' })}</span></td>
       <td>{field('description', 'Description', { width: '100%', minWidth: 120 })}</td>
       <td>{field('qty', '—', { width: '4ch' })}</td>

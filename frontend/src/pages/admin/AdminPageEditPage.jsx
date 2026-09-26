@@ -260,6 +260,26 @@ export default function AdminPageEditPage() {
     setRefsVues(prev => [...prev, r].sort((a, b) => parseInt(a.part_number) - parseInt(b.part_number)))
   }
 
+  const addLiaison = async (repere, nomenclatureId) => {
+    if (!nomenclatureId) return
+    const nomenc = refs.find(r => r.id === parseInt(nomenclatureId))
+    if (!nomenc) return
+    if (repere.liaisons?.some(l => l.nomenclature_id === parseInt(nomenclatureId))) return
+    await api.addRefVueLiaison(repere.id, parseInt(nomenclatureId))
+    setRefsVues(prev => prev.map(r => r.id === repere.id ? {
+      ...r,
+      liaisons: [...(r.liaisons ?? []), { nomenclature_id: nomenc.id, join_type: 'manual', part_number: nomenc.part_number, ref_no: nomenc.ref_no, description: nomenc.description }],
+    } : r))
+  }
+
+  const removeLiaison = async (repere, nomenclatureId) => {
+    await api.deleteRefVueLiaison(repere.id, nomenclatureId)
+    setRefsVues(prev => prev.map(r => r.id === repere.id ? {
+      ...r,
+      liaisons: r.liaisons.filter(l => l.nomenclature_id !== nomenclatureId),
+    } : r))
+  }
+
   const deleteRepere = async (r) => {
     if (!window.confirm(`Supprimer le repère ${r.part_number} ?`)) return
     await api.deleteRefVue(r.id)
@@ -577,16 +597,27 @@ export default function AdminPageEditPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {refs.map(r => (
-                      <NomenclatureRow
-                        key={r.id}
-                        data={r}
-                        selected={selectedNomencIds.has(r.id)}
-                        onSelect={checked => toggleNomencSelect(r.id, checked)}
-                        onUpdated={updated => setRefs(rs => rs.map(x => x.id === updated.id ? updated : x))}
-                        onDeleted={delId => setRefs(rs => rs.filter(x => x.id !== delId))}
-                      />
-                    ))}
+                    {(() => {
+                      // nomenclature_id → liste des part_number de repères qui y sont liés
+                      const nomencReperes = {}
+                      refsVues.forEach(rv => {
+                        rv.liaisons?.forEach(l => {
+                          if (!nomencReperes[l.nomenclature_id]) nomencReperes[l.nomenclature_id] = []
+                          nomencReperes[l.nomenclature_id].push(rv.part_number)
+                        })
+                      })
+                      return refs.map(r => (
+                        <NomenclatureRow
+                          key={r.id}
+                          data={r}
+                          reperes={nomencReperes[r.id] ?? []}
+                          selected={selectedNomencIds.has(r.id)}
+                          onSelect={checked => toggleNomencSelect(r.id, checked)}
+                          onUpdated={updated => setRefs(rs => rs.map(x => x.id === updated.id ? updated : x))}
+                          onDeleted={delId => setRefs(rs => rs.filter(x => x.id !== delId))}
+                        />
+                      ))
+                    })()}
                   </tbody>
                 </table>
               </div>
@@ -650,36 +681,66 @@ export default function AdminPageEditPage() {
                   <thead>
                     <tr>
                       <th>Repère</th>
-                      <th>Jointure</th>
-                      <th>Pièce trouvée</th>
+                      <th>Liaisons nomenclature</th>
                       <th></th>
                     </tr>
                   </thead>
                   <tbody>
-                    {refsVues.map(r => (
-                      <tr key={r.id} style={{ opacity: r.nomenclature_id ? 1 : 0.55 }}>
-                        <td>
-                          <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: '#8b5cf6', color: '#fff', borderRadius: '50%', width: 22, height: 22, fontSize: 11, fontWeight: 'bold' }}>
-                            {r.part_number}
-                          </span>
-                        </td>
-                        <td style={{ fontSize: '.75rem' }}>
-                          {r.join_type === 'ref_no' && <span style={{ color: '#10b981' }}>ref_no</span>}
-                          {r.join_type === 'part_number' && <span style={{ color: '#3b82f6' }}>part_number</span>}
-                          {!r.nomenclature_id && <span className="or-muted">—</span>}
-                        </td>
-                        <td style={{ fontSize: '.8rem' }}>
-                          {r.nomenclature_id
-                            ? <><span className="or-mono" style={{ fontSize: '.75rem' }}>{r.nomenc_part_number}</span> {r.description && <span className="or-muted"> · {r.description}</span>}</>
-                            : <span className="or-muted">non trouvé</span>}
-                        </td>
-                        <td>
-                          <button className="or-btn or-btn-ghost or-btn-sm or-btn-icon-only" onClick={() => deleteRepere(r)} title="Supprimer">
-                            <X size={12} />
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
+                    {refsVues.map(r => {
+                      const liaisons = r.liaisons ?? []
+                      const linkedIds = new Set(liaisons.map(l => l.nomenclature_id))
+                      const available = refs.filter(n => !linkedIds.has(n.id))
+                      return (
+                        <tr key={r.id} style={{ verticalAlign: 'top' }}>
+                          <td style={{ paddingTop: '0.6rem' }}>
+                            <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: liaisons.length > 0 ? '#8b5cf6' : '#6b7280', color: '#fff', borderRadius: '50%', width: 22, height: 22, fontSize: 11, fontWeight: 'bold' }}>
+                              {r.part_number}
+                            </span>
+                          </td>
+                          <td>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                              {liaisons.map(l => (
+                                <div key={l.nomenclature_id} style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '.78rem' }}>
+                                  <span style={{ fontSize: '.65rem', padding: '1px 4px', borderRadius: 3, background: l.join_type === 'ref_no' ? '#d1fae5' : l.join_type === 'part_number' ? '#dbeafe' : '#fef3c7', color: l.join_type === 'ref_no' ? '#065f46' : l.join_type === 'part_number' ? '#1e40af' : '#92400e' }}>
+                                    {l.join_type === 'ref_no' ? 'ref_no' : l.join_type === 'part_number' ? 'pn' : 'manuel'}
+                                  </span>
+                                  <span className="or-mono" style={{ fontSize: '.75rem' }}>{l.part_number}</span>
+                                  {l.description && <span className="or-muted" style={{ fontSize: '.75rem' }}>— {l.description.slice(0, 35)}{l.description.length > 35 ? '…' : ''}</span>}
+                                  <button
+                                    className="or-btn or-btn-ghost or-btn-sm or-btn-icon-only"
+                                    onClick={() => removeLiaison(r, l.nomenclature_id)}
+                                    title="Retirer cette liaison"
+                                    style={{ marginLeft: 'auto', opacity: 0.6 }}
+                                  >
+                                    <X size={11} />
+                                  </button>
+                                </div>
+                              ))}
+                              {available.length > 0 && (
+                                <select
+                                  className="or-select"
+                                  style={{ fontSize: '.78rem', width: '100%', opacity: 0.7 }}
+                                  value=""
+                                  onChange={e => { if (e.target.value) addLiaison(r, e.target.value) }}
+                                >
+                                  <option value="">+ Lier une nomenclature…</option>
+                                  {available.map(n => (
+                                    <option key={n.id} value={n.id}>
+                                      {n.ref_no ? `#${n.ref_no} · ` : ''}{n.part_number}{n.description ? ` — ${n.description.slice(0, 40)}` : ''}
+                                    </option>
+                                  ))}
+                                </select>
+                              )}
+                            </div>
+                          </td>
+                          <td style={{ paddingTop: '0.6rem' }}>
+                            <button className="or-btn or-btn-ghost or-btn-sm or-btn-icon-only" onClick={() => deleteRepere(r)} title="Supprimer le repère">
+                              <X size={12} />
+                            </button>
+                          </td>
+                        </tr>
+                      )
+                    })}
                   </tbody>
                 </table>
               </div>

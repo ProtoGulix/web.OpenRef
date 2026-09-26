@@ -106,6 +106,7 @@ def _split_and_deskew_one(args: tuple) -> dict:
         pil_img = _apply_deskew(pil_img, angle)
 
     pil_img.save(str(img_path), "JPEG", quality=90)
+    image_width, image_height = pil_img.size
 
     thumb = pil_img.copy()
     thumb.thumbnail((300, 300))
@@ -116,6 +117,8 @@ def _split_and_deskew_one(args: tuple) -> dict:
         "image": f"/storage/pages/{catalogue_id}/page_{page_num:03d}.jpg",
         "thumb": f"/storage/pages/{catalogue_id}/thumb_{page_num:03d}.jpg",
         "deskew_angle": angle,
+        "image_width": image_width,
+        "image_height": image_height,
     }
 
 
@@ -169,12 +172,14 @@ async def _stream_split(
                     page_id = await db.fetchval(
                         """INSERT INTO page
                                (id_catalogue, numero, image, thumb,
-                                deskew_angle, process_status, exclusion_zones)
-                           VALUES ($1, $2, $3, $4, $5, 'deskewed', '[]'::jsonb)
+                                deskew_angle, process_status, exclusion_zones,
+                                image_width, image_height)
+                           VALUES ($1, $2, $3, $4, $5, 'deskewed', '[]'::jsonb, $6, $7)
                            RETURNING id""",
                         catalogue_id, result["page"],
                         result["image"], result["thumb"],
                         result["deskew_angle"],
+                        result["image_width"], result["image_height"],
                     )
                     yield f"data: {json.dumps({'type': 'page_created', 'page': result['page'], 'page_id': page_id, 'image': result['image'], 'thumb': result['thumb'], 'deskew_angle': result['deskew_angle']})}\n\n"
                 except Exception as e:

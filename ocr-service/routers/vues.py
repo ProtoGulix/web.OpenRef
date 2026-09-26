@@ -341,26 +341,24 @@ async def ocr_vues_page(page_id: int = Form(...), column_template: str = Form(No
             )
             inserted += 1
 
-        # Jointure par ref_no (repères schéma → colonne ref_no de la nomenclature)
+        # Jointure par ref_no → ref_vue_nomenclature
         await db.execute(
-            """UPDATE references_vues rv
-               SET nomenclature_id = n.id, join_type = 'ref_no'
-               FROM nomenclature n, page p
-               WHERE p.id = rv.page_id AND p.id = $1
-                 AND n.source_page_id = rv.page_id
-                 AND rv.part_number = n.ref_no
-                 AND rv.nomenclature_id IS NULL""",
+            """INSERT INTO ref_vue_nomenclature (ref_vue_id, nomenclature_id, join_type)
+               SELECT rv.id, n.id, 'ref_no'
+               FROM references_vues rv
+               JOIN nomenclature n ON n.source_page_id = rv.page_id AND rv.part_number = n.ref_no
+               WHERE rv.page_id = $1
+               ON CONFLICT (ref_vue_id, nomenclature_id) DO NOTHING""",
             page_id,
         )
-        # Jointure par part_number (refs pièce)
+        # Jointure par part_number → ref_vue_nomenclature
         await db.execute(
-            """UPDATE references_vues rv
-               SET nomenclature_id = n.id, join_type = 'part_number'
-               FROM nomenclature n, page p
-               WHERE p.id = rv.page_id AND p.id = $1
-                 AND n.catalogue_id = p.id_catalogue
-                 AND rv.part_number = n.part_number
-                 AND rv.nomenclature_id IS NULL""",
+            """INSERT INTO ref_vue_nomenclature (ref_vue_id, nomenclature_id, join_type)
+               SELECT rv.id, n.id, 'part_number'
+               FROM references_vues rv
+               JOIN page p ON p.id = rv.page_id AND p.id = $1
+               JOIN nomenclature n ON n.catalogue_id = p.id_catalogue AND rv.part_number = n.part_number
+               ON CONFLICT (ref_vue_id, nomenclature_id) DO NOTHING""",
             page_id,
         )
 
@@ -436,34 +434,30 @@ async def jointure_nomenclature(catalogue_id: int = Form(...)):
     """
     db = await _get_db()
     try:
-        # Jointure par ref_no (repères schéma sur la même page)
+        # Jointure par ref_no → ref_vue_nomenclature
         r1 = await db.fetchrow(
             """WITH matched AS (
-                   UPDATE references_vues rv
-                   SET nomenclature_id = n.id, join_type = 'ref_no'
-                   FROM nomenclature n, page p
-                   WHERE p.id = rv.page_id
-                     AND p.id_catalogue = $1
-                     AND n.source_page_id = rv.page_id
-                     AND rv.part_number = n.ref_no
-                     AND rv.nomenclature_id IS NULL
-                   RETURNING rv.id
+                   INSERT INTO ref_vue_nomenclature (ref_vue_id, nomenclature_id, join_type)
+                   SELECT rv.id, n.id, 'ref_no'
+                   FROM references_vues rv
+                   JOIN page p ON p.id = rv.page_id AND p.id_catalogue = $1
+                   JOIN nomenclature n ON n.source_page_id = rv.page_id AND rv.part_number = n.ref_no
+                   ON CONFLICT (ref_vue_id, nomenclature_id) DO NOTHING
+                   RETURNING ref_vue_id
                )
                SELECT COUNT(*) AS c FROM matched""",
             catalogue_id,
         )
-        # Jointure par part_number
+        # Jointure par part_number → ref_vue_nomenclature
         r2 = await db.fetchrow(
             """WITH matched AS (
-                   UPDATE references_vues rv
-                   SET nomenclature_id = n.id, join_type = 'part_number'
-                   FROM nomenclature n, page p
-                   WHERE p.id = rv.page_id
-                     AND p.id_catalogue = $1
-                     AND n.catalogue_id = $1
-                     AND rv.part_number = n.part_number
-                     AND rv.nomenclature_id IS NULL
-                   RETURNING rv.id
+                   INSERT INTO ref_vue_nomenclature (ref_vue_id, nomenclature_id, join_type)
+                   SELECT rv.id, n.id, 'part_number'
+                   FROM references_vues rv
+                   JOIN page p ON p.id = rv.page_id AND p.id_catalogue = $1
+                   JOIN nomenclature n ON n.catalogue_id = $1 AND rv.part_number = n.part_number
+                   ON CONFLICT (ref_vue_id, nomenclature_id) DO NOTHING
+                   RETURNING ref_vue_id
                )
                SELECT COUNT(*) AS c FROM matched""",
             catalogue_id,

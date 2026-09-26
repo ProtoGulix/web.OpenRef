@@ -24,6 +24,8 @@ export const api = {
   getPageRefsVues: id => req(`/pages/${id}/refs-vues`),
   addRefVue: (pageId, body) => req(`/pages/${pageId}/refs-vues`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
   ocrPoint: (pageId, cx, cy) => req(`/pages/${pageId}/ocr-point`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cx, cy }) }),
+  addRefVueLiaison: (refVueId, nomenclatureId) => req(`/refs-vues/${refVueId}/nomenclatures`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nomenclature_id: nomenclatureId }) }),
+  deleteRefVueLiaison: (refVueId, nomenclatureId) => fetch(`/api/refs-vues/${refVueId}/nomenclatures/${nomenclatureId}`, { method: 'DELETE' }),
   deleteRefVue: id => fetch(`/api/refs-vues/${id}`, { method: 'DELETE' }),
   rerunVues: id => req(`/pages/${id}/rerun-vues`, { method: 'POST' }),
   rerunNomenclature: id => req(`/pages/${id}/rerun-nomenclature`, { method: 'POST' }),
@@ -42,4 +44,15 @@ export const api = {
 
   search: (q, marque) => req(`/search?q=${encodeURIComponent(q)}${marque ? `&marque=${marque}` : ''}`),
   getPrixArchive: partNumber => req(`/prix/archive/${encodeURIComponent(partNumber)}`),
+
+  getCatalogueGroupes: id => req(`/catalogues/${id}/groupes`),
+  getGroupe: id => req(`/groupes/${id}`),
+  createGroupe: (catalogueId, body) => req(`/catalogues/${catalogueId}/groupes`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
+  patchGroupe: (id, body) => req(`/groupes/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
+  deleteGroupe: id => fetch(`/api/groupes/${id}`, { method: 'DELETE' }),
+  addGroupePage: (groupeId, id_page) => req(`/groupes/${groupeId}/pages`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id_page }) }),
+  removeGroupePage: (groupeId, id_page) => fetch(`/api/groupes/${groupeId}/pages/${id_page}`, { method: 'DELETE' }),
+  patchGroupePage: (groupeId, pageId, body) => req(`/groupes/${groupeId}/pages/${pageId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
+  rerunGroupePageNomenclature: (groupeId, pageId) => req(`/groupes/${groupeId}/pages/${pageId}/rerun-nomenclature`, { method: 'POST' }),
+  joinGroupeNomenclatures: (groupeId) => req(`/groupes/${groupeId}/jointure`, { method: 'POST' }),
 }
