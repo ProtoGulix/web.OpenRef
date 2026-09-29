@@ -24,6 +24,7 @@ router.get('/groupes/:id', async (req, res) => {
     `SELECT g.*,
        p.image, p.thumb, p.image_width, p.image_height,
        p.nomenclature_bboxes, p.nomenclature_bbox,
+       c.marque, c.modele,
        c.column_template->>'schema_bbox' AS schema_bbox_raw,
        c.column_template->'schema_bbox' AS schema_bbox
      FROM groupe g

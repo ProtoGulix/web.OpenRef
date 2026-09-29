@@ -4,7 +4,19 @@ import pool from '../db/pool.js'
 const router = Router()
 
 router.get('/pages/:id', async (req, res) => {
-  const { rows } = await pool.query('SELECT * FROM page WHERE id=$1', [req.params.id])
+  // Jointure catalogue pour exposer marque/modele (ex: PricePanel doit filtrer les sources par marque
+  // réelle du catalogue, pas une valeur en dur côté frontend).
+  // groupe_id : si cette page est la page-schéma d'un groupe (plusieurs pages de nomenclature
+  // partageant un même schéma éclaté), l'UI doit charger le groupe plutôt que la page seule —
+  // sinon le tableau de références ne contiendrait que celles dont source_page_id = cette page.
+  const { rows } = await pool.query(
+    `SELECT p.*, c.marque, c.modele,
+            (SELECT g.id FROM groupe g WHERE g.id_page_schema = p.id LIMIT 1) AS groupe_id
+     FROM page p
+     JOIN catalogue c ON c.id = p.id_catalogue
+     WHERE p.id = $1`,
+    [req.params.id]
+  )
   if (!rows[0]) return res.status(404).json({ error: 'Not found' })
   res.json(rows[0])
 })

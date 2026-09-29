@@ -42,8 +42,11 @@ export const api = {
   patchSource: (id, body) => req(`/sources/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
   deleteSource: id => fetch(`${BASE}/sources/${id}`, { method: 'DELETE' }),
 
+  // Retourne soit un tableau de résultats (recherche non vide), soit { results: [], suggestions, marqueVide }
   search: (q, marque) => req(`/search?q=${encodeURIComponent(q)}${marque ? `&marque=${marque}` : ''}`),
+  searchSuggest: (q, marque) => req(`/search/suggest?q=${encodeURIComponent(q)}${marque ? `&marque=${marque}` : ''}`),
   getPrixArchive: partNumber => req(`/prix/archive/${encodeURIComponent(partNumber)}`),
+  getStats: () => req('/stats'),
 
   getCatalogueGroupes: id => req(`/catalogues/${id}/groupes`),
   getGroupe: id => req(`/groupes/${id}`),

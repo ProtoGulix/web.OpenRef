@@ -18,6 +18,7 @@ import sourcesRouter from './routes/sources.js'
 import importRouter from './routes/import.js'
 import prixRouter from './routes/prix.js'
 import searchRouter from './routes/search.js'
+import statsRouter from './routes/stats.js'
 
 const app = express()
 const PORT = process.env.PORT || 3001
@@ -36,6 +37,7 @@ app.use('/api/sources', sourcesRouter)
 app.use('/api/import', importRouter)
 app.use('/api/prix', prixRouter)
 app.use('/api/search', searchRouter)
+app.use('/api/stats', statsRouter)
 
 app.get('/api/health', (_req, res) => res.json({ status: 'ok' }))
 

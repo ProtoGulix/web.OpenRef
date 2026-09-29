@@ -196,17 +196,33 @@ GET            /api/import/:jobId/status
 GET            /api/import/all
 GET            /api/prix/stream         -- scraping live (SSE)
 GET            /api/prix/archive/:part_number
-GET            /api/search?q=...&marque=...
+GET            /api/search?q=...&marque=...       -- interroge `nomenclature` (pas l'ancienne table `reference`,
+                                                       quasi vide) ; si 0 résultat exact, renvoie
+                                                       { results: [], suggestions, marqueVide } au lieu d'un tableau
+GET            /api/search/suggest?q=...&marque=... -- suggestions floues seules (pg_trgm, similarity > 0.3, limite 5)
+GET            /api/stats               -- chiffres clés page d'accueil (catalogues, pages, références
+                                            extraites/corrigées), une seule requête agrégée
 ```
+
+Note : ce document a des sections qui datent du pipeline `bloc`/`reference` initial. Le pipeline réellement
+en place aujourd'hui (voir migrations 002 à 008) écrit dans `nomenclature` et `references_vues` ; la table
+`reference` n'est quasiment plus alimentée. Se référer au schéma réel (`\d nomenclature`) plutôt qu'aux
+sections ci-dessus en cas de doute.
 
 ---
 
 ## Frontend React (`frontend/`)
 
+Stack UI réelle : **React (Vite) + Bulma** pour la seule grille responsive (`columns`/`column is-*`),
+recouverte d'un **design system maison** défini dans `src/index.css` (tokens `--brand`/`--surface`/...,
+classes `.or-btn`, `.or-card`, `.or-input`, `.or-badge`, `.or-alert`, `.or-table`, `.or-chip`...). Bulma est
+neutralisé (couleurs, formulaires, cartes) — ne pas réintroduire ses styles, ni un second framework CSS.
+Icônes : `lucide-react`.
+
 ### Pages
 | Route | Description |
 |---|---|
-| `/` | Recherche globale par description ou référence |
+| `/` | **Accueil / recherche** — hero avec recherche (texte + marque + exemples cliquables), chiffres clés, recherches récentes (localStorage), résultats ou état vide intelligent (suggestion de recherche prix fournisseurs, références proches par similarité, message si marque sans référence extraite), grille des catalogues disponibles |
 | `/catalogues` | Liste des catalogues importés |
 | `/catalogue/:id` | Grille des pages d'un catalogue |
 | `/page/:id` | Image + overlay + tableau références |
@@ -224,6 +240,11 @@ GET            /api/search?q=...&marque=...
 - `<PricePanel />` — panneau prix SSE avec conversion devise
 - `<OcrConfBadge />` — 🔴 < 50 / 🟠 < 80 / 🟢 ≥ 80
 - `<ProgressOcr />` — barre de progression import (events `page_done`, `start`, `done`)
+- `<SearchHero />` — bloc hero de la page d'accueil : champ + sélecteur marque + bouton (autofocus), exemples cliquables
+- `<StatsBar />` — chiffres clés (`GET /api/stats`)
+- `<CatalogueGrid />` / `<CatalogueCard />` — grille de catalogues réutilisable (accueil + `/catalogues`), miniature 1ère page + progression de correction
+- `<RecentSearches />` — 5 dernières recherches (localStorage `openref_recent_searches`), cliquables, vidables
+- `<EmptyState />` — état 0 résultat : bouton prix fournisseurs si la requête ressemble à une référence, suggestions floues (`/api/search/suggest`), message si marque sans référence extraite
 
 ### Suivi de job (`AdminJobsPage`)
 - Polling BDD toutes les 5s via `GET /api/catalogues/:id/pages` pendant que le job tourne
@@ -271,6 +292,13 @@ Le modèle est persisté dans le volume `ollama_models` — pas besoin de re-té
 ### Migrations BDD appliquées
 - `migrate_001.sql` — ajout `catalogue.total_pages`, `page.status`, correction `job.phase` default
 - `migrate_002.sql` — nouveau pipeline : `page` enrichi (page_type, has_nomenclature, nomenclature_bbox, exclusion_zones, deskew_angle, raw_ocr_blocks, process_status), tables `nomenclature` et `references_vues`
+- `migrate_003.sql` — `nomenclature_bboxes` (multi-nomenclatures par page), `bbox_name`
+- `migrate_004.sql` — `nomenclature.corrige`
+- `migrate_005.sql` — table de jointure N-N `ref_vue_nomenclature`
+- `migrate_006.sql` — `page.image_width` / `image_height`
+- `migrate_007.sql` — tables `groupe` et `groupe_page`
+- `migrate_008.sql` — `groupe_page.nomenclature_bboxes` / `column_template`
+- `migrate_009.sql` — extension `pg_trgm` + index GIN trigram sur `nomenclature.part_number` (suggestions floues page d'accueil)
 
 ---
 

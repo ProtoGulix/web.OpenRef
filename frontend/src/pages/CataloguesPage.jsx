@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Upload } from 'lucide-react'
-import CatalogueCard from '../components/CatalogueCard'
+import CatalogueGrid from '../components/CatalogueGrid'
 import { api } from '../api/client'
 
 export default function CataloguesPage() {
@@ -32,15 +32,7 @@ export default function CataloguesPage() {
             Aucun catalogue. <Link to="/admin/import" style={{ color: 'var(--brand)', fontWeight: 600 }}>Importer maintenant</Link>.
           </div>
         )
-        : (
-          <div className="columns is-multiline">
-            {catalogues.map(c => (
-              <div key={c.id} className="column is-one-third-desktop is-half-tablet">
-                <CatalogueCard catalogue={c} />
-              </div>
-            ))}
-          </div>
-        )}
+        : <CatalogueGrid catalogues={catalogues} />}
     </div>
   )
 }

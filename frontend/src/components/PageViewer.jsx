@@ -39,11 +39,30 @@ export default function PageViewer({
   hoveredNomencIds = null, hoveredRepereId = null,
   showNomenclature = true, columnTemplate = null,
   schemaOnly = false, schemaBbox = null,
+  // Met en évidence le(s) repère(s) de vue éclatée lié(s) à une référence de nomenclature donnée
+  // (ex: résultat de recherche sélectionné) — les autres repères passent en discret.
+  // Indépendant de selectedRepereId/hoveredRepereId qui restent pilotés par l'éditeur admin.
+  highlightId = null,
+  // Restreint les repères "actifs" à ceux liés à l'un de ces ids de nomenclature (ex: tableau
+  // tronqué avec "Voir plus" : les pastilles dont la ligne n'est pas affichée passent en discret,
+  // pour ne pas laisser croire qu'elles pointent vers quelque chose de visible).
+  visibleNomencIds = null,
 }) {
   const [hoveredBloc, setHoveredBloc] = useState(null)
   const imgRef = useRef(null)
   const containerRef = useRef(null)
+  const highlightRef = useRef(null)
   const [natSize, setNatSize] = useState({ natW: 1, natH: 1 })
+
+  // Repère(s) correspondant à la référence mise en évidence (via ref_vue_nomenclature)
+  const highlightedRepereIds = highlightId != null
+    ? new Set(refsVues.filter(r => r.liaisons?.some(l => l.nomenclature_id === highlightId)).map(r => r.id))
+    : null
+
+  // Défilement centré sur le repère mis en évidence (changement de résultat sélectionné)
+  useEffect(() => {
+    if (highlightId != null) highlightRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' })
+  }, [highlightId])
 
   const onImgLoad = (e) => {
     setNatSize({ natW: e.target.naturalWidth, natH: e.target.naturalHeight })
@@ -215,7 +234,9 @@ export default function PageViewer({
         })
       })()}
 
-      {/* Overlay références extraites */}
+      {/* Overlay références extraites (bbox) — coordonnées en pixels natifs, comme les blocs OCR.
+          Converties en % de la zone affichée via scaleX/scaleY (pas de /10 arbitraire : ce n'était
+          qu'une hypothèse "pour mille" qui ne correspond ni aux pixels Tesseract ni aux points pdfplumber). */}
       {refs.map(ref => (
         ref.pos_left != null && ref.pos_top != null ? (
           <div
@@ -224,10 +245,10 @@ export default function PageViewer({
             title={`${ref.plate_ref} — ${ref.part_number}`}
             style={{
               position: 'absolute',
-              left: `${ref.pos_left / 10}%`,
-              top: `${ref.pos_top / 10}%`,
-              width: `${(ref.width ?? 30) / 10}%`,
-              height: `${(ref.height ?? 15) / 10}%`,
+              left: ref.pos_left * scaleX - cropOffsetX,
+              top: ref.pos_top * scaleY - cropOffsetY,
+              width: (ref.width ?? 30) * scaleX,
+              height: (ref.height ?? 15) * scaleY,
               border: '2px solid',
               borderColor: selectedNomencId === ref.id ? '#3273dc' : 'rgba(50,115,220,0.7)',
               background: selectedNomencId === ref.id ? 'rgba(50,115,220,0.15)' : 'transparent',
@@ -245,11 +266,19 @@ export default function PageViewer({
           const isSelected = selectedRepereId === r.id
           const isHovered = hoveredRepereId === r.id
           const hasLink = r.liaisons?.length > 0
-          const active = isSelected || isHovered
-          const dimmed = anyHovered && !isHovered && !isSelected
+          const isHighlighted = highlightedRepereIds?.has(r.id) ?? false
+          // Quand highlightId est actif, tous les autres repères passent en discret —
+          // indépendamment du hover/selected de l'éditeur admin (les deux usages ne se mélangent pas).
+          const dimmedByHighlight = highlightedRepereIds != null && !isHighlighted
+          // Repère dont aucune ligne liée n'est dans la liste visible (tableau tronqué) → discret
+          const dimmedByTruncation = visibleNomencIds != null
+            && !(r.liaisons?.some(l => visibleNomencIds.has(l.nomenclature_id)) ?? false)
+          const active = isSelected || isHovered || isHighlighted
+          const dimmed = dimmedByHighlight || dimmedByTruncation || (anyHovered && !isHovered && !isSelected)
           return (
             <div
               key={r.id}
+              ref={isHighlighted ? highlightRef : null}
               onClick={() => onRepereClick?.(r)}
               onMouseEnter={() => onRepereHover?.(r)}
               onMouseLeave={() => onRepereHover?.(null)}
@@ -259,21 +288,21 @@ export default function PageViewer({
                 left: Math.round(r.pos_x * scaleX - cropOffsetX),
                 top: Math.round(r.pos_y * scaleY - cropOffsetY),
                 transform: 'translate(-50%, -50%)',
-                background: isSelected ? '#6d28d9' : isHovered ? '#7c3aed' : hasLink ? '#8b5cf6' : '#9ca3af',
+                background: isHighlighted ? '#dc2626' : isSelected ? '#6d28d9' : isHovered ? '#7c3aed' : hasLink ? '#8b5cf6' : '#9ca3af',
                 color: '#fff',
                 borderRadius: '50%',
-                width: active ? 24 : 20,
-                height: active ? 24 : 20,
+                width: isHighlighted ? 28 : active ? 24 : 20,
+                height: isHighlighted ? 28 : active ? 24 : 20,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 fontSize: active ? 11 : 10,
                 fontWeight: 'bold',
                 border: active ? '2px solid #fff' : '1.5px solid rgba(255,255,255,0.8)',
-                boxShadow: isSelected ? '0 0 0 3px #6d28d9' : isHovered ? '0 0 0 3px rgba(124,58,237,0.5)' : '0 1px 4px rgba(0,0,0,0.35)',
+                boxShadow: isHighlighted ? '0 0 0 4px rgba(220,38,38,0.45)' : isSelected ? '0 0 0 3px #6d28d9' : isHovered ? '0 0 0 3px rgba(124,58,237,0.5)' : '0 1px 4px rgba(0,0,0,0.35)',
                 cursor: hasLink ? 'pointer' : 'default',
                 userSelect: 'none',
-                zIndex: isHovered ? 15 : 12,
+                zIndex: isHighlighted ? 20 : isHovered ? 15 : 12,
                 opacity: dimmed ? 0.25 : 1,
                 transition: 'all 0.15s',
               }}

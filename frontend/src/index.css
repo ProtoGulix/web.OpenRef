@@ -516,11 +516,11 @@ body {
 }
 .or-catalogue-card:hover { box-shadow: var(--shadow); transform: translateY(-2px); }
 .or-catalogue-card-thumb {
-  aspect-ratio: 3/4;
+  height: 180px;
   background: #f1f5f9;
   overflow: hidden;
 }
-.or-catalogue-card-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.or-catalogue-card-thumb img { width: 100%; height: 100%; object-fit: cover; object-position: top; display: block; }
 .or-catalogue-card-body { padding: .85rem 1rem; }
 .or-catalogue-card-title { font-weight: 600; font-size: .9rem; color: var(--text); line-height: 1.3; margin-bottom: .2rem; }
 .or-catalogue-card-sub   { font-size: .78rem; color: var(--text-muted); }
@@ -537,3 +537,175 @@ body {
 .or-mono   { font-family: 'SFMono-Regular', Consolas, monospace; font-size: .85em; background: #f1f5f9; padding: .1em .35em; border-radius: 3px; }
 .or-divider { border: none; border-top: 1px solid var(--border); margin: 1.25rem 0; }
 .or-sticky  { position: sticky; top: 72px; }
+
+/* ─── Hero (page d'accueil) ─────────────────────────────────────── */
+.or-hero {
+  text-align: center;
+  padding: 2rem 1rem 1.5rem;
+  max-width: 720px;
+  margin: 0 auto;
+}
+.or-hero-title {
+  font-size: 1.65rem;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0 0 .4rem;
+  letter-spacing: -.01em;
+}
+.or-hero-subtitle {
+  font-size: .95rem;
+  color: var(--text-muted);
+  margin: 0 0 1.5rem;
+}
+.or-hero-form { margin-bottom: 1rem; }
+.or-hero-examples {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: .5rem;
+  flex-wrap: wrap;
+}
+
+/* Mobile : champ pleine largeur en premier, sélecteur + bouton en dessous, icône hero masquée */
+@media (max-width: 640px) {
+  .or-hero-icon { display: none; }
+  .or-hero-form .or-field-addons {
+    flex-wrap: wrap;
+  }
+  .or-hero-form .or-field-addons .or-input {
+    flex: 1 1 100%;
+    border-radius: var(--radius) var(--radius) 0 0;
+  }
+  .or-hero-form .or-field-addons .or-select {
+    flex: 1 1 auto;
+    border-left: 1px solid var(--border);
+    border-radius: 0 0 0 var(--radius);
+  }
+  .or-hero-form .or-field-addons .or-btn:last-child {
+    flex: 0 0 auto;
+    border-radius: 0 0 var(--radius) 0;
+  }
+}
+
+/* ─── Chip (exemple cliquable / suggestion / recherche récente) ──── */
+.or-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: .3rem;
+  padding: .3rem .7rem;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: .8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--transition), border-color var(--transition);
+}
+.or-chip:hover { background: var(--brand-light); border-color: var(--brand); color: var(--brand-dark); }
+
+/* ─── Stats bar (chiffres clés) ─────────────────────────────────── */
+.or-stats-bar {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 2rem;
+  margin: 1.75rem 0;
+}
+.or-stat-item {
+  display: flex;
+  align-items: baseline;
+  gap: .45rem;
+  background: none;
+  border: none;
+  border-radius: var(--radius);
+  padding: .25rem .4rem;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background var(--transition);
+}
+.or-stat-item:hover { background: var(--surface-alt); }
+.or-stat-item:hover .or-stat-value { color: var(--brand); }
+.or-stat-item + .or-stat-item { border-left: 1px solid var(--border); margin-left: -.4rem; padding-left: 2rem; }
+.or-stat-icon { color: var(--brand); position: relative; top: -.05rem; align-self: center; }
+.or-stat-value { font-size: 1.7rem; font-weight: 700; color: var(--text); line-height: 1; }
+.or-stat-label { font-size: .8rem; color: var(--text-muted); }
+
+@media (max-width: 700px) {
+  .or-stats-bar { gap: 1.25rem; }
+  .or-stat-item + .or-stat-item { padding-left: 1.25rem; }
+  .or-stat-value { font-size: 1.4rem; }
+}
+
+/* ─── Recherches récentes ───────────────────────────────────────── */
+.or-recent-searches { margin: 1.25rem 0; }
+
+/* ─── État vide de recherche ────────────────────────────────────── */
+.or-empty-state { margin-top: .5rem; }
+
+/* ─── Barre de recherche compacte (mode résultats) ──────────────── */
+.or-compact-search {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  padding: .5rem 0 1rem;
+}
+.or-compact-search-form { flex: 1 1 320px; min-width: 0; }
+
+/* ─── Résultats de recherche : ligne dépliée (accordéon) ─────────── */
+.or-result-row-selected { background: var(--brand-light) !important; }
+.or-result-row-selected td:first-child { box-shadow: inset 3px 0 0 var(--brand); }
+
+/* Pastille de repère dans le tableau de résultats — même style que celle de PageDetailView */
+.or-result-pastille {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #8b5cf6;
+  color: #fff;
+  border-radius: 50%;
+  width: 20px;
+  height: 20px;
+  font-size: 10px;
+  font-weight: bold;
+}
+
+@media (max-width: 640px) {
+  .or-compact-search { gap: .6rem; }
+}
+
+/* ─── Popover d'aperçu résultat (survol desktop) ─────────────────── */
+.or-preview-popover {
+  position: fixed;
+  z-index: 200;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+.or-preview-popover-fallback {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: .5rem;
+  padding: 1rem;
+  height: 100%;
+  box-sizing: border-box;
+}
+.or-preview-popover-fallback img { max-width: 100%; max-height: 200px; object-fit: contain; border: 1px solid var(--border); }
+.or-preview-popover-fallback p { font-size: .8rem; color: var(--text-muted); margin: 0; }
+
+/* ─── Vue page (PageDetailView) ──────────────────────────────────── */
+/* Bulma .column est un flex-item sans min-width:0 : le PageViewer en mode crop élargit
+   volontairement son <img> au-delà du conteneur pour zoomer (overflow:hidden le masque),
+   mais sans ce reset la colonne elle-même grandissait pour l'accueillir → débordement
+   horizontal de toute la page. */
+.or-page-detail-schema { min-width: 0; max-width: 100%; }
+.page-viewer-img { max-width: none; }

@@ -2,9 +2,16 @@ import { Link } from 'react-router-dom'
 import { BookOpen, Wrench, CalendarDays, FileText } from 'lucide-react'
 
 export default function CatalogueCard({ catalogue }) {
-  const { id, name, marque, modele, annee_debut, annee_fin, nb_pages } = catalogue
+  const { id, name, marque, modele, annee_debut, annee_fin, nb_pages, thumb, nb_refs, nb_refs_corrigees } = catalogue
+  const progress = nb_refs > 0 ? Math.round((nb_refs_corrigees / nb_refs) * 100) : null
+
   return (
     <div className="or-card">
+      {thumb && (
+        <Link to={`/catalogue/${id}`} className="or-catalogue-card-thumb" style={{ display: 'block' }}>
+          <img src={thumb} alt="" loading="lazy" />
+        </Link>
+      )}
       <div className="or-card-body">
         <div className="or-flex or-gap-2" style={{ marginBottom: '.5rem' }}>
           <BookOpen size={16} style={{ color: 'var(--brand)', flexShrink: 0 }} />
@@ -25,6 +32,14 @@ export default function CatalogueCard({ catalogue }) {
             <FileText size={12} /> {nb_pages} page{nb_pages !== 1 ? 's' : ''}
           </span>
         </div>
+        {progress !== null && (
+          <div style={{ marginTop: '.6rem' }}>
+            <progress className="or-progress" value={progress} max={100} style={{ height: 5 }} />
+            <p className="or-muted" style={{ fontSize: '.7rem', marginTop: '.2rem' }}>
+              {nb_refs_corrigees} / {nb_refs} références corrigées ({progress}%)
+            </p>
+          </div>
+        )}
       </div>
       <div className="or-card-footer">
         <Link to={`/catalogue/${id}`}>Parcourir</Link>

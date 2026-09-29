@@ -5,7 +5,11 @@ const router = Router()
 
 router.get('/', async (_req, res) => {
   const { rows } = await pool.query(
-    `SELECT c.*, COUNT(p.id)::int AS nb_pages
+    `SELECT c.*, COUNT(p.id)::int AS nb_pages,
+       (SELECT p2.thumb FROM page p2 WHERE p2.id_catalogue = c.id
+          ORDER BY (p2.type = 'cover') DESC, p2.numero LIMIT 1) AS thumb,
+       (SELECT COUNT(*)::int FROM nomenclature n WHERE n.catalogue_id = c.id) AS nb_refs,
+       (SELECT COUNT(*)::int FROM nomenclature n WHERE n.catalogue_id = c.id AND n.corrige) AS nb_refs_corrigees
      FROM catalogue c
      LEFT JOIN page p ON p.id_catalogue = c.id
      GROUP BY c.id
